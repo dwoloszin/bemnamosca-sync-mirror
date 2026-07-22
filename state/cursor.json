@@ -1,47 +1,47 @@
 {
   "drogaleste": {
-    "lastBarcode": "3701129813638",
-    "totalSynced": 223,
-    "completedFullPass": false
+    "lastBarcode": "",
+    "totalSynced": 9375,
+    "completedFullPass": true
   },
   "drogasil": {
-    "lastBarcode": "1074000000514",
-    "totalSynced": 5157,
+    "lastBarcode": "7898185413721",
+    "totalSynced": 93199,
     "completedFullPass": false
   },
   "drogaraia": {
-    "lastBarcode": "1029626",
-    "totalSynced": 4821,
+    "lastBarcode": "7897820751846",
+    "totalSynced": 94257,
     "completedFullPass": false
   },
   "drogariasaopaulo": {
-    "lastBarcode": "00000K1091000",
-    "totalSynced": 269,
-    "completedFullPass": false
+    "lastBarcode": "",
+    "totalSynced": 62930,
+    "completedFullPass": true
   },
   "ultrafarma": {
-    "lastBarcode": "3401397240470",
-    "totalSynced": 223,
-    "completedFullPass": false
+    "lastBarcode": "",
+    "totalSynced": 18641,
+    "completedFullPass": true
   },
   "paguemenos": {
-    "lastBarcode": "0079400500205",
-    "totalSynced": 232,
-    "completedFullPass": false
+    "lastBarcode": "",
+    "totalSynced": 26136,
+    "completedFullPass": true
   },
   "farmais": {
-    "lastBarcode": "17899026410159",
-    "totalSynced": 223,
-    "completedFullPass": false
+    "lastBarcode": "",
+    "totalSynced": 35764,
+    "completedFullPass": true
   },
   "panvel": {
-    "lastBarcode": "00000K1247000",
-    "totalSynced": 223,
-    "completedFullPass": false
+    "lastBarcode": "",
+    "totalSynced": 45138,
+    "completedFullPass": true
   },
   "farmaconde": {
-    "lastBarcode": "3701129804193",
-    "totalSynced": 223,
-    "completedFullPass": false
+    "lastBarcode": "",
+    "totalSynced": 4399,
+    "completedFullPass": true
   }
 }
