@@ -38,7 +38,19 @@ module.exports = {
   // (which walks stores independently and can take weeks to reach a given
   // barcode). See that script's header for the two-phase discovery/cross-
   // store approach.
-  MIN_VALUE: 100000,
+  MIN_VALUE: 10000,
+
+  // Caps each run's write budget at this percent of TODAY'S REMAINING write
+  // headroom (20,000/day free-tier limit minus writes already used today,
+  // per the SystemHealth/firestore-free-tier-guard doc the app's own guard
+  // scheduler keeps updated hourly) — never just the static maxWritesPerRun
+  // above. E.g. at 75%, if 2,752 writes are already used today, the dynamic
+  // ceiling is floor((20000-2752) * 0.75) = 12,936, and the run's actual
+  // budget is min(maxWritesPerRun, that ceiling). The 25% left out covers
+  // staleness in the hourly snapshot plus organic app traffic the rest of
+  // the day. Matches the existing PRICE_COMPACTION_GUARD_SAFETY_PERCENT
+  // convention in functions/index.js (also defaults to 75).
+  dynamicBudgetSafetyPercent: 75,
 
   // Public GitHub repo used as the historical sync mirror: it stores the
   // last-synced (price, min, max) per barcode per store so repeat runs

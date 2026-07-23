@@ -197,6 +197,61 @@ function ensureStoreDoc(writer, storeId, storeConfig) {
   });
 }
 
+// Pure math — no Firestore access — so this is directly unit-testable.
+// Caps requestedMax at a SAFE fraction of whatever write headroom is left
+// today, so a sync run can never be the thing that pushes the project over
+// the free-tier write limit. safetyPercent < 100 leaves room for staleness
+// in the cached usage snapshot (see fetchGuardUsage) and for organic app
+// traffic writing the rest of the day.
+function calculateDynamicWriteBudget({ writesUsed, writeLimit, requestedMax, safetyPercent }) {
+  const used = Number(writesUsed) || 0;
+  const limit = Number(writeLimit) > 0 ? Number(writeLimit) : 20000;
+  const safety = Math.max(0, Math.min(100, Number(safetyPercent))) / 100;
+
+  const remaining = Math.max(0, limit - used);
+  const safeRemaining = Math.floor(remaining * safety);
+  const budget = Math.max(0, Math.min(Number(requestedMax) || 0, safeRemaining));
+
+  return { budget, used, limit, remaining, safeRemaining };
+}
+
+// Reads the same SystemHealth/firestore-free-tier-guard doc the app's own
+// compaction job trusts (kept fresh by firestoreFreeTierGuardScheduler,
+// which runs hourly). Fails OPEN — a missing/unreadable doc or a stale
+// snapshot should never block a sync run; it just means this extra safety
+// layer is skipped for that run and the configured/requested budget is
+// used as-is.
+async function fetchGuardUsage(db) {
+  try {
+    const snap = await db.collection('SystemHealth').doc('firestore-free-tier-guard').get();
+    if (!snap.exists) return null;
+    const data = snap.data() || {};
+    const writesUsed = Number(data.usage?.writes);
+    const writeLimit = Number(data.limits?.writes);
+    if (!Number.isFinite(writesUsed) || !Number.isFinite(writeLimit) || writeLimit <= 0) return null;
+    return { writesUsed, writeLimit, checkedAt: data.checkedAt || null };
+  } catch {
+    return null;
+  }
+}
+
+// Combines the two: fetch today's usage, then compute a safe budget. See
+// calculateDynamicWriteBudget for the fallback-to-requestedMax behavior
+// when guard data isn't available.
+async function computeDynamicWriteBudget(db, requestedMax, safetyPercent) {
+  const guard = await fetchGuardUsage(db);
+  if (!guard) {
+    return { budget: requestedMax, used: null, limit: null, remaining: null, safeRemaining: null, checkedAt: null, guardAvailable: false };
+  }
+  const result = calculateDynamicWriteBudget({
+    writesUsed: guard.writesUsed,
+    writeLimit: guard.writeLimit,
+    requestedMax,
+    safetyPercent,
+  });
+  return { ...result, checkedAt: guard.checkedAt, guardAvailable: true };
+}
+
 module.exports = {
   STORE_RECENT_PRICE_COLLECTION,
   normalizeBarcode,
@@ -212,4 +267,7 @@ module.exports = {
   createWriteBuffer,
   writePriceTriplet,
   ensureStoreDoc,
+  calculateDynamicWriteBudget,
+  fetchGuardUsage,
+  computeDynamicWriteBudget,
 };

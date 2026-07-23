@@ -41,6 +41,15 @@
 //   node scripts/sync-neon-high-value.cjs --apply --min-value 100000  # override
 //   node scripts/sync-neon-high-value.cjs --apply --barcode 7891234567890  # skip
 //     discovery, cross-check exactly this one barcode against every store
+//   node scripts/sync-neon-high-value.cjs --apply --ignore-guard  # skip the
+//     dynamic write-budget check, use --max-writes/config as-is
+//
+// DYNAMIC WRITE BUDGET: on --apply, the requested budget (--max-writes or
+// sync-config.maxWritesPerRun) is capped at sync-config.dynamicBudgetSafetyPercent
+// of today's REMAINING Firestore write headroom (20,000/day free tier minus
+// writes already used today, per SystemHealth/firestore-free-tier-guard —
+// see scripts/lib/neonSyncCore.cjs's computeDynamicWriteBudget). This can
+// only shrink the budget, never grow it past what was requested.
 //
 // Local/emulator use: scripts/sync-neon-high-value-local.cjs sets
 // FIRESTORE_EMULATOR_HOST first and spawns this file.
@@ -68,7 +77,7 @@ const CROSS_STORE_CHUNK_SIZE = 500;
 
 // ── CLI args ─────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const args = { apply: false, minValue: null, maxWrites: null, serviceAccount: null, projectId: null, barcode: null };
+  const args = { apply: false, minValue: null, maxWrites: null, serviceAccount: null, projectId: null, barcode: null, ignoreGuard: false };
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (token === '--apply') args.apply = true;
@@ -81,6 +90,9 @@ function parseArgs(argv) {
     // every active store — for a controlled single-product smoke test
     // instead of a full MIN_VALUE scan.
     if (token === '--barcode') args.barcode = argv[++i];
+    // Bypass the dynamic write-budget check (today's remaining Firestore
+    // write headroom) and use --max-writes/config maxWritesPerRun as-is.
+    if (token === '--ignore-guard') args.ignoreGuard = true;
   }
   return args;
 }
@@ -239,9 +251,30 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
 async function main() {
   console.log(`\n=== Neon → Firestore HIGH-VALUE cross-store sync (${isEmulatorRun ? 'EMULATOR' : 'PRODUCTION'} | ${args.apply ? 'APPLY' : 'DRY-RUN'}) ===`);
   console.log(`MIN_VALUE this run: ${MIN_VALUE} (priority tier: >= ${MIN_VALUE * PRIORITY_MULTIPLIER})`);
-  console.log(`Write budget this run: ${MAX_WRITES}`);
 
   const db = core.initFirestore(args, isEmulatorRun);
+
+  // Cap the requested budget at a safe fraction of today's REMAINING write
+  // headroom (SystemHealth/firestore-free-tier-guard, kept fresh hourly by
+  // firestoreFreeTierGuardScheduler) — never just the static config value.
+  // Skipped entirely for --dry-run (nothing gets written anyway) or
+  // --ignore-guard (explicit opt-out for a controlled test).
+  let effectiveMaxWrites = MAX_WRITES;
+  if (args.apply && !args.ignoreGuard) {
+    const dyn = await core.computeDynamicWriteBudget(db, MAX_WRITES, syncConfig.dynamicBudgetSafetyPercent);
+    if (dyn.guardAvailable) {
+      effectiveMaxWrites = dyn.budget;
+      const estProducts = Math.floor(effectiveMaxWrites / 3);
+      console.log(`Today's writes so far: ${dyn.used} / ${dyn.limit} (checked ${dyn.checkedAt || 'unknown time'})`);
+      console.log(`Safe remaining (${syncConfig.dynamicBudgetSafetyPercent}% of ${dyn.remaining} left): ${dyn.safeRemaining}`);
+      console.log(`Write budget this run: ${effectiveMaxWrites} (requested ${MAX_WRITES}) — ~${estProducts} product(s) at ~3 writes each`);
+    } else {
+      console.log(`Write budget this run: ${effectiveMaxWrites} (guard data unavailable — using requested/configured value as-is)`);
+    }
+  } else {
+    console.log(`Write budget this run: ${effectiveMaxWrites}${args.ignoreGuard ? ' (--ignore-guard: dynamic check skipped)' : ''}`);
+  }
+
   const mirror = new SyncMirror(path.join(ROOT, syncConfig.mirror.localPath));
   const writer = core.createWriteBuffer(db, syncConfig.writeBatchSize);
 
@@ -263,7 +296,7 @@ async function main() {
   }
 
   try {
-    const budget = { writesUsed: 0, maxWrites: MAX_WRITES };
+    const budget = { writesUsed: 0, maxWrites: effectiveMaxWrites };
 
     if (args.barcode) {
       // Manual single-product mode: skip discovery, cross-check exactly this
@@ -316,7 +349,7 @@ async function main() {
     }
     console.log(`  Invalid barcodes skipped: ${report.invalidBarcodes}`);
     console.log(`  Invalid/missing price skipped: ${report.invalidPrice}`);
-    console.log(`  Firestore writes ${args.apply ? 'performed' : 'estimated'}: ${budget.writesUsed} / ${MAX_WRITES}`);
+    console.log(`  Firestore writes ${args.apply ? 'performed' : 'estimated'}: ${budget.writesUsed} / ${effectiveMaxWrites}`);
     console.log(`  Mirror commit/push: ${gitResult.pushed ? 'OK' : `skipped (${gitResult.reason})`}`);
     if (!args.apply) {
       console.log('\n  Dry-run only — re-run with --apply to write to Firestore and update the mirror.');

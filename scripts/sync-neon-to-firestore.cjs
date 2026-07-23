@@ -50,7 +50,7 @@ const ROOT = path.resolve(__dirname, '..');
 
 // ── CLI args ─────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const args = { apply: false, store: null, maxWrites: null, serviceAccount: null, projectId: null };
+  const args = { apply: false, store: null, maxWrites: null, serviceAccount: null, projectId: null, ignoreGuard: false };
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (token === '--apply') args.apply = true;
@@ -59,6 +59,9 @@ function parseArgs(argv) {
     if (token === '--max-writes') args.maxWrites = Number(argv[++i]);
     if (token === '--service-account') args.serviceAccount = argv[++i];
     if (token === '--project-id') args.projectId = argv[++i];
+    // Bypass the dynamic write-budget check (today's remaining Firestore
+    // write headroom) and use --max-writes/config maxWritesPerRun as-is.
+    if (token === '--ignore-guard') args.ignoreGuard = true;
   }
   return args;
 }
@@ -271,9 +274,27 @@ async function syncStore(db, mirror, writer, storeConfig, budget, report) {
 // ── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
   console.log(`\n=== Neon → Firestore sync (${isEmulatorRun ? 'EMULATOR' : 'PRODUCTION'} | ${args.apply ? 'APPLY' : 'DRY-RUN'}) ===`);
-  console.log(`Write budget this run: ${MAX_WRITES}`);
 
   const db = initFirestore();
+
+  // Cap the requested budget at a safe fraction of today's REMAINING write
+  // headroom (SystemHealth/firestore-free-tier-guard, kept fresh hourly by
+  // firestoreFreeTierGuardScheduler) — never just the static config value.
+  let effectiveMaxWrites = MAX_WRITES;
+  if (args.apply && !args.ignoreGuard) {
+    const dyn = await core.computeDynamicWriteBudget(db, MAX_WRITES, syncConfig.dynamicBudgetSafetyPercent);
+    if (dyn.guardAvailable) {
+      effectiveMaxWrites = dyn.budget;
+      console.log(`Today's writes so far: ${dyn.used} / ${dyn.limit} (checked ${dyn.checkedAt || 'unknown time'})`);
+      console.log(`Safe remaining (${syncConfig.dynamicBudgetSafetyPercent}% of ${dyn.remaining} left): ${dyn.safeRemaining}`);
+      console.log(`Write budget this run: ${effectiveMaxWrites} (requested ${MAX_WRITES})`);
+    } else {
+      console.log(`Write budget this run: ${effectiveMaxWrites} (guard data unavailable — using requested/configured value as-is)`);
+    }
+  } else {
+    console.log(`Write budget this run: ${effectiveMaxWrites}${args.ignoreGuard ? ' (--ignore-guard: dynamic check skipped)' : ''}`);
+  }
+
   const mirror = new SyncMirror(path.join(ROOT, syncConfig.mirror.localPath));
   const writer = createWriteBuffer(db, syncConfig.writeBatchSize);
 
@@ -298,7 +319,7 @@ async function main() {
       report.skippedStores.push(`${storeConfig.slug} (no ${storeConfig.envVar})`);
     }
   }
-  const perStoreWrites = activeStores.length > 0 ? Math.max(1, Math.floor(MAX_WRITES / activeStores.length)) : 0;
+  const perStoreWrites = activeStores.length > 0 ? Math.max(1, Math.floor(effectiveMaxWrites / activeStores.length)) : 0;
 
   let globalWritesUsed = 0;
   for (const storeConfig of activeStores) {
@@ -324,8 +345,8 @@ async function main() {
   }
   console.log(`  Invalid barcodes skipped: ${report.invalidBarcodes}`);
   console.log(`  Invalid/missing price skipped: ${report.invalidPrice}`);
-  console.log(`  Per-store budget this run: ${perStoreWrites} (${MAX_WRITES} / ${activeStores.length} active stores)`);
-  console.log(`  Firestore writes ${args.apply ? 'performed' : 'estimated'}: ${globalWritesUsed} / ${MAX_WRITES}`);
+  console.log(`  Per-store budget this run: ${perStoreWrites} (${effectiveMaxWrites} / ${activeStores.length} active stores)`);
+  console.log(`  Firestore writes ${args.apply ? 'performed' : 'estimated'}: ${globalWritesUsed} / ${effectiveMaxWrites}`);
   console.log(`  Mirror commit/push: ${gitResult.pushed ? 'OK' : `skipped (${gitResult.reason})`}`);
   if (!args.apply) {
     console.log('\n  Dry-run only — re-run with --apply to write to Firestore and update the mirror.');
