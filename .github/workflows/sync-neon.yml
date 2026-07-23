@@ -1,0 +1,139 @@
+name: Neon -> Firestore Price Sync
+
+# Runs from THIS repo (public) instead of the main app repo (private) so
+# GitHub Actions minutes are free regardless of how often this fires.
+# The scripts here are a copy of bemnamosca_db/scripts/sync-neon-*.cjs —
+# keep them in sync if the sync logic changes there.
+#
+# Scheduled daily at 17:00 UTC — pharmacy scrapers update their Neon
+# databases at ~16:00 UTC, so this catches fresh data shortly after.
+# Manual runs are also available (Actions tab -> Run workflow) for
+# ad-hoc testing without waiting for the schedule.
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply writes to Firestore (false = dry-run, safe to test)
+        required: true
+        default: false
+        type: boolean
+      store:
+        description: Limit to one store slug (blank = all configured stores)
+        required: false
+        default: ''
+        type: string
+      max_writes:
+        description: Override maxWritesPerRun for this run (blank = use scripts/sync-config.cjs default)
+        required: false
+        default: ''
+        type: string
+      barcode:
+        description: Sync exactly one barcode across every store (skips MIN_VALUE discovery) — uses the high-value script
+        required: false
+        default: ''
+        type: string
+
+# contents:write is required — this job commits the updated mirror state
+# (mirror/*.json + state/cursor.json) back to THIS repo after every run.
+permissions:
+  contents: write
+
+# Every NEON_DATABASE_URL_<CHAIN> secret referenced here is optional — a
+# chain whose secret isn't set yet just resolves to an empty string, and
+# scripts/sync-neon-to-firestore.cjs already skips any store with no
+# configured connection string. New chain? Add its secret AND a line here.
+env:
+  NEON_DATABASE_URL_DROGALESTE: ${{ secrets.NEON_DATABASE_URL_DROGALESTE }}
+  NEON_DATABASE_URL_DROGASIL: ${{ secrets.NEON_DATABASE_URL_DROGASIL }}
+  NEON_DATABASE_URL_DROGARAIA: ${{ secrets.NEON_DATABASE_URL_DROGARAIA }}
+  NEON_DATABASE_URL_DROGARIASAOPAULO: ${{ secrets.NEON_DATABASE_URL_DROGARIASAOPAULO }}
+  NEON_DATABASE_URL_ULTRAFARMA: ${{ secrets.NEON_DATABASE_URL_ULTRAFARMA }}
+  NEON_DATABASE_URL_PAGUEMENOS: ${{ secrets.NEON_DATABASE_URL_PAGUEMENOS }}
+  NEON_DATABASE_URL_FARMAIS: ${{ secrets.NEON_DATABASE_URL_FARMAIS }}
+  NEON_DATABASE_URL_PANVEL: ${{ secrets.NEON_DATABASE_URL_PANVEL }}
+  NEON_DATABASE_URL_FARMACIASAPP: ${{ secrets.NEON_DATABASE_URL_FARMACIASAPP }}
+  NEON_DATABASE_URL_FARMACONDE: ${{ secrets.NEON_DATABASE_URL_FARMACONDE }}
+
+jobs:
+  sync-neon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        # persist-credentials (default: true) leaves the GITHUB_TOKEN wired
+        # into this checkout's git config, so the later `git push` (done by
+        # scripts/lib/syncMirror.cjs's commitAndPush) authenticates without
+        # any extra secret — no PAT needed since we're pushing to this same
+        # repo, not cloning a separate one.
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure git identity for mirror commits
+        run: |
+          git config user.email "sync@bem-na-mosca.app"
+          git config user.name "Bem na Mosca Sync"
+          git checkout -B main
+          git branch --set-upstream-to=origin/main main || true
+
+      - name: Prepare Firebase service account
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "Missing secret: FIREBASE_SERVICE_ACCOUNT_JSON"
+            exit 1
+          fi
+          printf "%s" "$FIREBASE_SERVICE_ACCOUNT_JSON" > service-account.ci.json
+
+      - name: Run scheduled sync (apply)
+        if: github.event_name == 'schedule'
+        run: |
+          node scripts/sync-neon-to-firestore.cjs \
+            --apply \
+            --service-account ./service-account.ci.json \
+            --project-id "${{ secrets.VITE_FIREBASE_PROJECT_ID }}"
+
+      - name: Run manual sync
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          MODE="--dry-run"
+          if [ "${{ inputs.apply }}" = "true" ]; then
+            MODE="--apply"
+          fi
+
+          if [ -n "${{ inputs.barcode }}" ]; then
+            MIN_VALUE_ARG=()
+            if [ -n "${{ inputs.max_writes }}" ]; then
+              MIN_VALUE_ARG=(--max-writes "${{ inputs.max_writes }}")
+            fi
+            node scripts/sync-neon-high-value.cjs \
+              $MODE --barcode "${{ inputs.barcode }}" "${MIN_VALUE_ARG[@]}" \
+              --service-account ./service-account.ci.json \
+              --project-id "${{ secrets.VITE_FIREBASE_PROJECT_ID }}"
+          else
+            STORE_ARG=()
+            if [ -n "${{ inputs.store }}" ]; then
+              STORE_ARG=(--store "${{ inputs.store }}")
+            fi
+            MAX_WRITES_ARG=()
+            if [ -n "${{ inputs.max_writes }}" ]; then
+              MAX_WRITES_ARG=(--max-writes "${{ inputs.max_writes }}")
+            fi
+            node scripts/sync-neon-to-firestore.cjs \
+              $MODE "${STORE_ARG[@]}" "${MAX_WRITES_ARG[@]}" \
+              --service-account ./service-account.ci.json \
+              --project-id "${{ secrets.VITE_FIREBASE_PROJECT_ID }}"
+          fi

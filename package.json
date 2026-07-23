@@ -1,0 +1,17 @@
+{
+  "name": "bemnamosca-sync-mirror",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Neon -> Firestore price sync automation, run from this public repo so GitHub Actions minutes are free (see README.md).",
+  "type": "commonjs",
+  "scripts": {
+    "sync:neon": "node scripts/sync-neon-to-firestore.cjs",
+    "sync:neon:apply": "node scripts/sync-neon-to-firestore.cjs --apply",
+    "sync:neon:highvalue": "node scripts/sync-neon-high-value.cjs",
+    "sync:neon:highvalue:apply": "node scripts/sync-neon-high-value.cjs --apply"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.2",
+    "pg": "^8.22.0"
+  }
+}
