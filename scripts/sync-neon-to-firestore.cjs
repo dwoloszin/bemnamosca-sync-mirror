@@ -332,8 +332,17 @@ async function main() {
   let gitResult = { pushed: false, reason: 'dry-run — mirror not touched' };
   if (args.apply) {
     await writer.flushRemaining();
-    mirror.flush();
-    gitResult = mirror.commitAndPush(`sync: ${new Date().toISOString().slice(0, 10)} — ${globalWritesUsed} writes`);
+    if (isEmulatorRun) {
+      // Emulator (:local) runs write to the local Firestore emulator only. They
+      // must NOT commit/push the shared production mirror — those writes don't
+      // exist in production, and committing them would corrupt the dedup state
+      // (production would then skip rows it never actually synced). Skip the
+      // mirror entirely so a local test run leaves the mirror repo untouched.
+      gitResult = { pushed: false, reason: 'emulator run — production mirror not touched' };
+    } else {
+      mirror.flush();
+      gitResult = mirror.commitAndPush(`sync: ${new Date().toISOString().slice(0, 10)} — ${globalWritesUsed} writes`);
+    }
   }
 
   console.log('\n=== Summary ===');

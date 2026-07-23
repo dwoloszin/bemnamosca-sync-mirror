@@ -32,13 +32,14 @@ module.exports = {
   },
 
   // Threshold (same currency units as offers.regular_price/promo_price —
-  // Brazilian reais, e.g. 10000 = R$10.000,00) used by
+  // Brazilian reais, e.g. 1000 = R$1.000,00) used by
   // sync-neon-high-value.cjs to find expensive products worth cross-checking
   // across every store, instead of relying on the full-catalog cursor sync
   // (which walks stores independently and can take weeks to reach a given
   // barcode). See that script's header for the two-phase discovery/cross-
-  // store approach.
-  MIN_VALUE: 10000,
+  // store approach. Lower = more products qualify = more read/write pressure
+  // (still capped by maxWritesPerRun and the dynamic budget below).
+  MIN_VALUE: 1000,
 
   // Caps each run's write budget at this percent of TODAY'S REMAINING write
   // headroom (20,000/day free-tier limit minus writes already used today,

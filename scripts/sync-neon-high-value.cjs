@@ -336,8 +336,14 @@ async function main() {
     let gitResult = { pushed: false, reason: 'dry-run — mirror not touched' };
     if (args.apply) {
       await writer.flushRemaining();
-      mirror.flush();
-      gitResult = mirror.commitAndPush(`sync-high-value: ${new Date().toISOString().slice(0, 10)} — ${budget.writesUsed} writes`);
+      if (isEmulatorRun) {
+        // Emulator (:local) runs must not commit/push the shared production
+        // mirror — see the same guard in sync-neon-to-firestore.cjs.
+        gitResult = { pushed: false, reason: 'emulator run — production mirror not touched' };
+      } else {
+        mirror.flush();
+        gitResult = mirror.commitAndPush(`sync-high-value: ${new Date().toISOString().slice(0, 10)} — ${budget.writesUsed} writes`);
+      }
     }
 
     console.log('\n=== Summary ===');
