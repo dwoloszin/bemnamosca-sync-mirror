@@ -1,12 +1,8 @@
 // ──────────────────────────────────────────────────────────
 // Bem na Mosca — Neon → Firestore sync configuration
 // ──────────────────────────────────────────────────────────
-// This is the copy that RUNS the scheduled/manual GitHub Action from this
-// repo (bemnamosca-sync-mirror is public, so Actions minutes are free —
-// see README.md). It must stay in sync with the source of truth in the
-// main app repo: bemnamosca_db/scripts/sync-config.cjs. Local/emulator
-// testing still happens from bemnamosca_db; only the production automation
-// runs from here.
+// Tunable knobs for scripts/sync-neon-to-firestore.cjs. Edit and re-run —
+// no code changes needed to raise/lower the sync volume.
 'use strict';
 
 module.exports = {
@@ -36,7 +32,7 @@ module.exports = {
   },
 
   // Threshold (same currency units as offers.regular_price/promo_price —
-  // Brazilian reais, e.g. 100000 = R$100.000,00) used by
+  // Brazilian reais, e.g. 10000 = R$10.000,00) used by
   // sync-neon-high-value.cjs to find expensive products worth cross-checking
   // across every store, instead of relying on the full-catalog cursor sync
   // (which walks stores independently and can take weeks to reach a given
@@ -44,21 +40,20 @@ module.exports = {
   // store approach.
   MIN_VALUE: 100000,
 
-  // This script runs FROM the mirror repo's own checkout in CI (or from a
-  // local clone of it), so the mirror IS the current working directory —
-  // no separate clone step needed. localPath: '.' means SyncMirror reads
-  // and writes mirror/ and state/ right here at the repo root.
+  // Public GitHub repo used as the historical sync mirror: it stores the
+  // last-synced (price, min, max) per barcode per store so repeat runs
+  // can diff WITHOUT reading Firestore. Owner/token are reused from the
+  // existing VITE_GITHUB_OWNER / VITE_GITHUB_TOKEN in .env.local.
   mirror: {
     repo: 'bemnamosca-sync-mirror',
     branch: 'main',
-    localPath: '.',
+    localPath: '.', // gitignored working copy of the mirror repo
   },
 
   // One Neon Postgres database per pharmacy chain (each scraped daily).
-  // `envVar` names the environment variable holding that store's
-  // connection string (GitHub Actions secret in CI, .env.local locally).
-  // Stores whose env var is unset/empty are skipped automatically — safe
-  // to list a chain before its credentials exist.
+  // `envVar` names the .env.local variable holding that store's
+  // connection string. Stores whose env var is unset/empty are skipped
+  // automatically — safe to list a chain before its credentials exist.
   stores: [
     { slug: 'drogaleste', displayName: 'Drogaleste', envVar: 'NEON_DATABASE_URL_DROGALESTE' },
     { slug: 'drogasil', displayName: 'Drogasil', envVar: 'NEON_DATABASE_URL_DROGASIL' },
