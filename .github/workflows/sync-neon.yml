@@ -5,6 +5,15 @@ name: Neon -> Firestore Price Sync
 # The scripts here are a copy of bemnamosca_db/scripts/sync-neon-*.cjs —
 # keep them in sync if the sync logic changes there.
 #
+# HIGH-VALUE ONLY: this always runs scripts/sync-neon-high-value.cjs, never
+# the full-catalog cursor script (sync-neon-to-firestore.cjs). It finds
+# every barcode priced >= MIN_VALUE anywhere (scripts/sync-config.cjs) and
+# cross-checks it against every store, so expensive items always have a
+# fresh cross-store price comparison. The full-catalog script still exists
+# for a manual/local run (`npm run sync:neon:apply` in bemnamosca_db) if you
+# want the rest of the catalog synced too — it's just not part of this
+# automatic schedule.
+#
 # Scheduled daily at 17:00 UTC — pharmacy scrapers update their Neon
 # databases at ~16:00 UTC, so this catches fresh data shortly after.
 # Manual runs are also available (Actions tab -> Run workflow) for
@@ -19,18 +28,13 @@ on:
         required: true
         default: false
         type: boolean
-      store:
-        description: Limit to one store slug (blank = all configured stores)
+      barcode:
+        description: Sync exactly one barcode across every store (blank = MIN_VALUE discovery across all stores)
         required: false
         default: ''
         type: string
       max_writes:
         description: Override maxWritesPerRun for this run (blank = use scripts/sync-config.cjs default)
-        required: false
-        default: ''
-        type: string
-      barcode:
-        description: Sync exactly one barcode across every store (skips MIN_VALUE discovery) — uses the high-value script
         required: false
         default: ''
         type: string
@@ -42,7 +46,7 @@ permissions:
 
 # Every NEON_DATABASE_URL_<CHAIN> secret referenced here is optional — a
 # chain whose secret isn't set yet just resolves to an empty string, and
-# scripts/sync-neon-to-firestore.cjs already skips any store with no
+# scripts/sync-neon-high-value.cjs already skips any store with no
 # configured connection string. New chain? Add its secret AND a line here.
 env:
   NEON_DATABASE_URL_DROGALESTE: ${{ secrets.NEON_DATABASE_URL_DROGALESTE }}
@@ -97,43 +101,24 @@ jobs:
           fi
           printf "%s" "$FIREBASE_SERVICE_ACCOUNT_JSON" > service-account.ci.json
 
-      - name: Run scheduled sync (apply)
-        if: github.event_name == 'schedule'
-        run: |
-          node scripts/sync-neon-to-firestore.cjs \
-            --apply \
-            --service-account ./service-account.ci.json \
-            --project-id "${{ secrets.VITE_FIREBASE_PROJECT_ID }}"
-
-      - name: Run manual sync
-        if: github.event_name == 'workflow_dispatch'
+      - name: Run high-value sync
         shell: bash
         run: |
           MODE="--dry-run"
-          if [ "${{ inputs.apply }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.apply }}" = "true" ]; then
             MODE="--apply"
           fi
 
+          BARCODE_ARG=()
           if [ -n "${{ inputs.barcode }}" ]; then
-            MIN_VALUE_ARG=()
-            if [ -n "${{ inputs.max_writes }}" ]; then
-              MIN_VALUE_ARG=(--max-writes "${{ inputs.max_writes }}")
-            fi
-            node scripts/sync-neon-high-value.cjs \
-              $MODE --barcode "${{ inputs.barcode }}" "${MIN_VALUE_ARG[@]}" \
-              --service-account ./service-account.ci.json \
-              --project-id "${{ secrets.VITE_FIREBASE_PROJECT_ID }}"
-          else
-            STORE_ARG=()
-            if [ -n "${{ inputs.store }}" ]; then
-              STORE_ARG=(--store "${{ inputs.store }}")
-            fi
-            MAX_WRITES_ARG=()
-            if [ -n "${{ inputs.max_writes }}" ]; then
-              MAX_WRITES_ARG=(--max-writes "${{ inputs.max_writes }}")
-            fi
-            node scripts/sync-neon-to-firestore.cjs \
-              $MODE "${STORE_ARG[@]}" "${MAX_WRITES_ARG[@]}" \
-              --service-account ./service-account.ci.json \
-              --project-id "${{ secrets.VITE_FIREBASE_PROJECT_ID }}"
+            BARCODE_ARG=(--barcode "${{ inputs.barcode }}")
           fi
+          MAX_WRITES_ARG=()
+          if [ -n "${{ inputs.max_writes }}" ]; then
+            MAX_WRITES_ARG=(--max-writes "${{ inputs.max_writes }}")
+          fi
+
+          node scripts/sync-neon-high-value.cjs \
+            $MODE "${BARCODE_ARG[@]}" "${MAX_WRITES_ARG[@]}" \
+            --service-account ./service-account.ci.json \
+            --project-id "${{ secrets.VITE_FIREBASE_PROJECT_ID }}"
