@@ -63,11 +63,15 @@ module.exports = {
     localPath: '.', // gitignored working copy of the mirror repo
   },
 
-  // One Neon Postgres database per pharmacy chain (each scraped daily).
-  // `envVar` names the .env.local variable holding that store's
-  // connection string. Stores whose env var is unset/empty are skipped
-  // automatically — safe to list a chain before its credentials exist.
+  // One Neon Postgres database per pharmacy chain (each scraped on its own
+  // schedule — see the scraper cron table in the repo notes). `envVar` names
+  // the .env.local variable holding that store's connection string. Stores
+  // whose env var is unset/empty are skipped automatically — safe to list a
+  // chain before its credentials exist. The Firestore sync itself runs on the
+  // schedule in bemnamosca-sync-mirror/.github/workflows/sync-neon.yml,
+  // independent of each store's scrape cadence.
   stores: [
+    // Large chains
     { slug: 'drogaleste', displayName: 'Drogaleste', envVar: 'NEON_DATABASE_URL_DROGALESTE' },
     { slug: 'drogasil', displayName: 'Drogasil', envVar: 'NEON_DATABASE_URL_DROGASIL' },
     { slug: 'drogaraia', displayName: 'Droga Raia', envVar: 'NEON_DATABASE_URL_DROGARAIA' },
@@ -78,5 +82,15 @@ module.exports = {
     { slug: 'panvel', displayName: 'Panvel', envVar: 'NEON_DATABASE_URL_PANVEL' },
     { slug: 'farmaciasapp', displayName: 'Farmácias APP', envVar: 'NEON_DATABASE_URL_FARMACIASAPP' },
     { slug: 'farmaconde', displayName: 'Farmaconde', envVar: 'NEON_DATABASE_URL_FARMACONDE' },
+    // Smaller / regional chains
+    { slug: 'eualiria', displayName: 'Eu Aliria', envVar: 'NEON_DATABASE_URL_EUALIRIA' },
+    { slug: 'agillemed', displayName: 'Agille Med', envVar: 'NEON_DATABASE_URL_AGILLEMED' },
+    { slug: 'novamed', displayName: 'Novamed', envVar: 'NEON_DATABASE_URL_NOVAMED' },
+    { slug: 'pharmed', displayName: 'Pharmed', envVar: 'NEON_DATABASE_URL_PHARMED' },
+    { slug: 'justmedicamentos', displayName: 'Just Medicamentos', envVar: 'NEON_DATABASE_URL_JUSTMEDICAMENTOS' },
+    { slug: 'ghfarma', displayName: 'GH Farma', envVar: 'NEON_DATABASE_URL_GHFARMA' },
+    { slug: 'levitta', displayName: 'Levitta', envVar: 'NEON_DATABASE_URL_LEVITTA' },
+    { slug: 'dinamica', displayName: 'Dinâmica', envVar: 'NEON_DATABASE_URL_DINAMICA' },
+    { slug: 'facilita', displayName: 'Facilita', envVar: 'NEON_DATABASE_URL_FACILITA' },
   ],
 };
