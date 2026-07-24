@@ -67,6 +67,35 @@ class SyncMirror {
     this._dirtyShards.add(`${storeSlug}/${shardKey}`);
   }
 
+  /** Every barcode currently tracked for a store, across all its shard files. */
+  listBarcodes(storeSlug) {
+    const dir = path.join(this.mirrorDir, storeSlug);
+    let files = [];
+    try {
+      files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+    } catch {
+      return [];
+    }
+    const out = [];
+    for (const f of files) {
+      const shard = this._loadShard(storeSlug, f.slice(0, -5)); // strip ".json", uses cache
+      for (const barcode of Object.keys(shard)) out.push(barcode);
+    }
+    return out;
+  }
+
+  /** Remove a barcode from a store's mirror entirely (marks the shard dirty). */
+  delete(storeSlug, barcode) {
+    const shardKey = shardOf(barcode);
+    const shard = this._loadShard(storeSlug, shardKey);
+    if (Object.prototype.hasOwnProperty.call(shard, barcode)) {
+      delete shard[barcode];
+      this._dirtyShards.add(`${storeSlug}/${shardKey}`);
+      return true;
+    }
+    return false;
+  }
+
   getCursor(storeSlug) {
     return this.cursor[storeSlug] || { lastBarcode: '', totalSynced: 0, completedFullPass: false };
   }
