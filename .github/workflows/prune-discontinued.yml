@@ -1,0 +1,107 @@
+name: Prune discontinued products
+
+# Deletes products that vanished from a store's scraper (Neon
+# offers.is_available=false / row gone) for longer than the grace period,
+# so the app stops showing prices for things that no longer exist. Runs in
+# THIS repo because it needs both Neon access and the mirror (to track when
+# each barcode first went missing). Firestore DELETES are capped against the
+# day's remaining delete quota, and the mirror is updated so pruned barcodes
+# can't be re-written by a later sync.
+#
+# Scheduled daily at 08:00 UTC — after the quota resets (07:00 UTC) and after
+# the morning sync/backfill windows, so it runs against a fresh delete budget.
+# The routine only STAMPS "missing since" on the first sighting and deletes
+# after PRUNE_GRACE_DAYS of continuous unavailability, so nothing is deleted
+# for at least the first week after this goes live.
+on:
+  schedule:
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply deletes to Firestore (false = dry-run, safe to test)
+        required: true
+        default: false
+        type: boolean
+      grace_days:
+        description: Days a product must be continuously unavailable before deletion (blank = 7)
+        required: false
+        default: ''
+        type: string
+
+# contents:write — the job commits the updated mirror state (missing-since
+# stamps + removed barcodes) back to this repo after every run.
+permissions:
+  contents: write
+
+env:
+  PRUNE_GRACE_DAYS: ${{ github.event.inputs.grace_days }}
+  NEON_DATABASE_URL_DROGALESTE: ${{ secrets.NEON_DATABASE_URL_DROGALESTE }}
+  NEON_DATABASE_URL_DROGASIL: ${{ secrets.NEON_DATABASE_URL_DROGASIL }}
+  NEON_DATABASE_URL_DROGARAIA: ${{ secrets.NEON_DATABASE_URL_DROGARAIA }}
+  NEON_DATABASE_URL_DROGARIASAOPAULO: ${{ secrets.NEON_DATABASE_URL_DROGARIASAOPAULO }}
+  NEON_DATABASE_URL_ULTRAFARMA: ${{ secrets.NEON_DATABASE_URL_ULTRAFARMA }}
+  NEON_DATABASE_URL_PAGUEMENOS: ${{ secrets.NEON_DATABASE_URL_PAGUEMENOS }}
+  NEON_DATABASE_URL_FARMAIS: ${{ secrets.NEON_DATABASE_URL_FARMAIS }}
+  NEON_DATABASE_URL_PANVEL: ${{ secrets.NEON_DATABASE_URL_PANVEL }}
+  NEON_DATABASE_URL_FARMACIASAPP: ${{ secrets.NEON_DATABASE_URL_FARMACIASAPP }}
+  NEON_DATABASE_URL_FARMACONDE: ${{ secrets.NEON_DATABASE_URL_FARMACONDE }}
+  NEON_DATABASE_URL_EUALIRIA: ${{ secrets.NEON_DATABASE_URL_EUALIRIA }}
+  NEON_DATABASE_URL_AGILLEMED: ${{ secrets.NEON_DATABASE_URL_AGILLEMED }}
+  NEON_DATABASE_URL_NOVAMED: ${{ secrets.NEON_DATABASE_URL_NOVAMED }}
+  NEON_DATABASE_URL_PHARMED: ${{ secrets.NEON_DATABASE_URL_PHARMED }}
+  NEON_DATABASE_URL_JUSTMEDICAMENTOS: ${{ secrets.NEON_DATABASE_URL_JUSTMEDICAMENTOS }}
+  NEON_DATABASE_URL_GHFARMA: ${{ secrets.NEON_DATABASE_URL_GHFARMA }}
+  NEON_DATABASE_URL_LEVITTA: ${{ secrets.NEON_DATABASE_URL_LEVITTA }}
+  NEON_DATABASE_URL_DINAMICA: ${{ secrets.NEON_DATABASE_URL_DINAMICA }}
+  NEON_DATABASE_URL_FACILITA: ${{ secrets.NEON_DATABASE_URL_FACILITA }}
+
+jobs:
+  prune-discontinued:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        # persist-credentials leaves GITHUB_TOKEN wired in so the mirror
+        # commit/push (scripts/lib/syncMirror.cjs commitAndPush) works.
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure git identity for mirror commits
+        run: |
+          git config user.email "sync@bem-na-mosca.app"
+          git config user.name "Bem na Mosca Sync"
+
+      - name: Prepare Firebase service account
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "Missing secret: FIREBASE_SERVICE_ACCOUNT_JSON"
+            exit 1
+          fi
+          printf "%s" "$FIREBASE_SERVICE_ACCOUNT_JSON" > service-account.ci.json
+
+      - name: Run prune
+        shell: bash
+        run: |
+          # Scheduled runs apply (the grace period + first-run-stamps-only is
+          # the safety); manual runs default to dry-run unless apply=true.
+          MODE="--dry-run"
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.apply }}" = "true" ]; then
+            MODE="--apply"
+          fi
+          node scripts/prune-discontinued.cjs \
+            $MODE \
+            --service-account ./service-account.ci.json \
+            --project-id "${{ secrets.VITE_FIREBASE_PROJECT_ID }}"
