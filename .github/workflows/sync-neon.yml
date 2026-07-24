@@ -14,13 +14,19 @@ name: Neon -> Firestore Price Sync
 # want the rest of the catalog synced too — it's just not part of this
 # automatic schedule.
 #
-# Scheduled daily at 17:00 UTC — pharmacy scrapers update their Neon
-# databases at ~16:00 UTC, so this catches fresh data shortly after.
+# Scheduled every 4h, offset to land right after the scraper waves:
+# the 8h-cycle stores (drogasil 40 */8, ultrafarma 45 */8, drogaraia
+# 50 */8) take 60-90 min, so their fresh data is ready ~2:15/10:15/18:15
+# UTC; the 4h-cycle stores finish within ~30 min of their marks. Running
+# at :30 past 2/6/10/14/18/22 catches every wave shortly after it lands.
+# Worst-case budget: 6 runs x 1000 writes = 6k/day (30% of the 20k free
+# quota); the dynamic write-budget guard inside the script caps each run
+# against the day's actual remaining headroom on top of that.
 # Manual runs are also available (Actions tab -> Run workflow) for
 # ad-hoc testing without waiting for the schedule.
 on:
   schedule:
-    - cron: '0 17 * * *'
+    - cron: '30 2,6,10,14,18,22 * * *'
   workflow_dispatch:
     inputs:
       apply:
