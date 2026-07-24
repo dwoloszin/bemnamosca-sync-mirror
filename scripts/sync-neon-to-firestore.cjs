@@ -266,6 +266,12 @@ async function syncStore(db, mirror, writer, storeConfig, budget, report) {
     }
 
     report.perStore.push({ slug: storeConfig.slug, scanned: storeScanned, changed: storeChanged });
+
+    // Record data freshness (newest offers.updated_at) so the freshness
+    // monitor can detect a dead scraper even when prices look unchanged.
+    if (args.apply) {
+      await core.recordStoreFreshness(writer, client, storeConfig);
+    }
   } finally {
     await client.end().catch(() => {});
   }

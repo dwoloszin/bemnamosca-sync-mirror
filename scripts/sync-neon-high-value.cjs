@@ -333,6 +333,14 @@ async function main() {
       }
     }
 
+    // Record data freshness for EVERY active store (not just ones with price
+    // changes this run) so the freshness monitor can detect a dead scraper.
+    if (args.apply) {
+      for (const storeConfig of activeStores) {
+        await core.recordStoreFreshness(writer, clients.get(storeConfig.slug), storeConfig);
+      }
+    }
+
     let gitResult = { pushed: false, reason: 'dry-run — mirror not touched' };
     if (args.apply) {
       await writer.flushRemaining();

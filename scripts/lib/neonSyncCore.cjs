@@ -197,6 +197,33 @@ function ensureStoreDoc(writer, storeId, storeConfig) {
   });
 }
 
+// Record per-store data freshness so the freshness monitor can detect a dead
+// scraper. last_data_at = the newest updated_at in the store's Neon offers —
+// it FREEZES when the scraper stops even though the sync keeps running and
+// prices "look" present. This is distinct from PriceEntry.date_recorded, which
+// only advances when a price CHANGES (a legitimately stable store would look
+// stale by that metric). Cost: one aggregate query per store + one Firestore
+// write. Runs regardless of the write budget — cheap and safety-critical.
+async function recordStoreFreshness(writer, client, storeConfig) {
+  let lastDataAt = null;
+  try {
+    const { rows } = await client.query(
+      'select max(updated_at) as last_data_at from offers where is_available = true'
+    );
+    if (rows[0] && rows[0].last_data_at) {
+      lastDataAt = new Date(rows[0].last_data_at).toISOString();
+    }
+  } catch (err) {
+    // Non-fatal — a freshness-probe failure must never abort the price sync.
+    console.warn(`[recordStoreFreshness] ${storeConfig.slug}: ${err.message}`);
+    return;
+  }
+  writer.upsert('Store', buildStoreDocId(storeConfig.slug), {
+    last_data_at: lastDataAt,
+    last_synced_at: new Date().toISOString(),
+  });
+}
+
 // Pure math — no Firestore access — so this is directly unit-testable.
 // Caps requestedMax at a SAFE fraction of whatever write headroom is left
 // today, so a sync run can never be the thing that pushes the project over
@@ -267,6 +294,7 @@ module.exports = {
   createWriteBuffer,
   writePriceTriplet,
   ensureStoreDoc,
+  recordStoreFreshness,
   calculateDynamicWriteBudget,
   fetchGuardUsage,
   computeDynamicWriteBudget,
