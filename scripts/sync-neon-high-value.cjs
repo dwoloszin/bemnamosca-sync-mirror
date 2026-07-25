@@ -186,12 +186,14 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
 
   const perStoreStats = new Map(); // slug -> { scanned, changed }
   const bumpStat = (slug, field) => {
-    if (!perStoreStats.has(slug)) perStoreStats.set(slug, { scanned: 0, changed: 0 });
+    if (!perStoreStats.has(slug)) perStoreStats.set(slug, { scanned: 0, created: 0, updated: 0 });
     perStoreStats.get(slug)[field] += 1;
   };
   const storeDocEnsured = new Set();
 
+  let outOfBudget = false;
   for (const barcodeGroup of chunk(ordered, CROSS_STORE_CHUNK_SIZE)) {
+    if (outOfBudget) break; // don't run Phase A queries we can't act on
     // Phase A — collect this chunk's rows from EVERY store first (2 queries per
     // store), grouped by barcode. Processing barcode-major (rather than
     // store-major) is what lets the cursor advance one barcode at a time: a
@@ -235,19 +237,33 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
     // Phase B — walk the chunk in barcode order, writing every store's price
     // for a barcode before moving on. Budget is checked per barcode, so the
     // cursor always stops on a fully-completed barcode.
-    for (const barcode of barcodeGroup) {
+    //
+    // BACKLOG PRIORITY: pass 'new' writes only (store, product) pairs Firestore
+    // has never seen; pass 'update' then spends whatever budget is LEFT on
+    // price changes to already-synced pairs. Measured 2026-07: refreshing
+    // existing pairs needs ~1242 writes/pass, more than one run's whole budget,
+    // so without this split price churn would keep starving the ~10k-pair
+    // backlog. Self-balancing: while the backlog is large the 'new' pass
+    // consumes the budget and 'update' rarely runs; once the backlog clears the
+    // 'new' pass writes nothing and updates get the full budget. The cursor
+    // advances on the 'new' pass, so coverage is still guaranteed.
+    for (const phase of ['new', 'update']) {
+      if (outOfBudget) break;
+      for (const barcode of barcodeGroup) {
       if (budget.writesUsed >= budget.maxWrites) {
         // Persist where we stopped so the next run picks up from here
         // instead of restarting at the top of the tier.
-        saveCursor(lastCompleted, false);
-        report.resumeFrom = report.resumeFrom || {};
-        report.resumeFrom[tierLabel] = lastCompleted || '(start)';
-        for (const [slug, st] of perStoreStats) report.crossCheckByStore.push({ slug, tier: tierLabel, ...st });
-        return;
+        if (phase === 'new') {
+          saveCursor(lastCompleted, false);
+          report.resumeFrom = report.resumeFrom || {};
+          report.resumeFrom[tierLabel] = lastCompleted || '(start)';
+        }
+        outOfBudget = true;
+        break;
       }
 
       for (const { storeConfig, row, agg } of byBarcode.get(barcode) || []) {
-        bumpStat(storeConfig.slug, 'scanned');
+        if (phase === 'new') bumpStat(storeConfig.slug, 'scanned');
 
         const price = core.effectivePrice(row);
         if (price === null) { report.invalidPrice += 1; continue; }
@@ -256,14 +272,23 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
         const max = agg && Number.isFinite(agg.max) ? core.round2(Math.max(agg.max, price)) : core.round2(price);
         const priceRounded = core.round2(price);
 
+        // Write ONLY when the current price changed. min/max (the 30-day
+        // range) is purely informative — a product still at R$1000 whose
+        // range shifted from 8000-12000 to 7000-13000 changes nothing the
+        // user acts on, so spending 3 writes on it would starve the backlog.
+        // The mirror is intentionally left untouched in that case too, so we
+        // don't churn git with range-only diffs; whenever the price does
+        // change we write the freshly-queried min/max along with it.
         const previous = mirror.get(storeConfig.slug, barcode);
-        const unchanged = previous
-          && previous.price === priceRounded
-          && previous.min === min
-          && previous.max === max;
-        if (unchanged) continue;
+        if (previous && previous.price === priceRounded) continue;
 
         const isNewProduct = !previous;
+        // Backlog priority: capture never-seen (store, product) pairs first —
+        // a newly listed product is invisible to users until it's written —
+        // and only spend leftover budget on re-pricing pairs we already have.
+        if (phase === 'new' && !isNewProduct) continue;
+        if (phase === 'update' && isNewProduct) continue;
+
         const storeId = core.buildStoreDocId(storeConfig.slug);
 
         if (args.apply) {
@@ -285,22 +310,31 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
           budget.writesUsed += 3; // dry-run estimate: Product + StoreRecentPriceEntry + PriceEntry
         }
 
-        bumpStat(storeConfig.slug, 'changed');
+        bumpStat(storeConfig.slug, phase === 'new' ? 'created' : 'updated');
       }
 
-      // Barcode fully handled across all stores — safe resume point.
-      lastCompleted = barcode;
-      if (lastBarcode && barcode >= lastBarcode) wrapped = true;
+      // Barcode fully handled across all stores for this phase. Only the
+      // 'new' pass owns the cursor — the 'update' pass is opportunistic
+      // (leftover budget) and must not move the coverage pointer.
+      if (phase === 'new') {
+        lastCompleted = barcode;
+        if (lastBarcode && barcode >= lastBarcode) wrapped = true;
+      }
+      }
     }
   }
 
   for (const [slug, st] of perStoreStats) report.crossCheckByStore.push({ slug, tier: tierLabel, ...st });
 
-  // Reached the end of the tier within budget → full pass complete, start over
-  // from the beginning next run so refreshed prices get picked up.
-  saveCursor('', true);
-  report.fullPass = report.fullPass || {};
-  report.fullPass[tierLabel] = wrapped ? 'completed (wrapped)' : 'completed';
+  // Only when we actually walked the whole tier within budget is the pass
+  // complete — reset the cursor so the next run starts over and picks up
+  // refreshed prices. (If the budget ran out, the cursor was already saved at
+  // the stopping point and must not be cleared here.)
+  if (!outOfBudget) {
+    saveCursor('', true);
+    report.fullPass = report.fullPass || {};
+    report.fullPass[tierLabel] = wrapped ? 'completed (wrapped)' : 'completed';
+  }
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -412,7 +446,7 @@ async function main() {
 
     console.log('\n=== Summary ===');
     for (const s of report.crossCheckByStore) {
-      console.log(`  ${s.slug.padEnd(20)} [${s.tier}] scanned=${s.scanned}  changed=${s.changed}`);
+      console.log(`  ${s.slug.padEnd(20)} [${s.tier}] scanned=${s.scanned}  new=${s.created ?? 0}  repriced=${s.updated ?? 0}`);
     }
     if (report.skippedStores.length > 0) {
       console.log(`  Skipped: ${report.skippedStores.join(', ')}`);

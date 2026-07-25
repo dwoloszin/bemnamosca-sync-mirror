@@ -191,12 +191,12 @@ async function syncStore(db, mirror, writer, storeConfig, budget, report) {
         // layout (mirror/<slug>/...) — the record key itself must be the
         // PLAIN barcode, or every entry would shard by the (constant) store
         // prefix instead of spreading across shard files by barcode.
+        // Write ONLY when the current price changed — min/max (the 30-day
+        // range) is informative and doesn't affect what the user sees as the
+        // price, so a range-only shift isn't worth 3 writes. Kept identical to
+        // the same guard in sync-neon-high-value.cjs.
         const previous = mirror.get(storeConfig.slug, barcode);
-        const unchanged = previous
-          && previous.price === priceRounded
-          && previous.min === min
-          && previous.max === max;
-        if (unchanged) { confirmedBarcode = row.ean; continue; }
+        if (previous && previous.price === priceRounded) { confirmedBarcode = row.ean; continue; }
 
         if (budget.writesUsed >= budget.maxWrites) {
           // This row's price change was NOT synced — leave confirmedBarcode
