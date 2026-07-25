@@ -133,11 +133,11 @@ async function discoverHighValueBarcodes(clients, activeStores, report) {
   for (const storeConfig of activeStores) {
     const client = clients.get(storeConfig.slug);
     const { rows } = await client.query(
-      `select ean, (case when is_discounted and promo_price > 0 then promo_price else regular_price end) as eff_price
+      `select ean, (${core.EFFECTIVE_PRICE_SQL}) as eff_price
        from offers
        where is_available = true
          and ean is not null and ean <> ''
-         and (case when is_discounted and promo_price > 0 then promo_price else regular_price end) >= $1`,
+         and (${core.EFFECTIVE_PRICE_SQL}) >= $1`,
       [MIN_VALUE]
     );
 
@@ -178,8 +178,8 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
       if (eans.length > 0) {
         const { rows: aggRows } = await client.query(
           `select ean,
-                  min(case when is_discounted and promo_price > 0 then promo_price else regular_price end) as min_price,
-                  max(case when is_discounted and promo_price > 0 then promo_price else regular_price end) as max_price
+                  min(${core.EFFECTIVE_PRICE_SQL}) as min_price,
+                  max(${core.EFFECTIVE_PRICE_SQL}) as max_price
            from price_history
            where ean = any($1) and store_id = $2
            group by ean`,

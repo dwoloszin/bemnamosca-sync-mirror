@@ -60,12 +60,36 @@ function buildRecentDocId(productId, storeRecentKey) {
   return `${safeProd}__${safeStore}`;
 }
 
+// The price a customer actually pays: the promo price whenever it's a real,
+// LOWER price than the regular one, else the regular price.
+//
+// We deliberately do NOT require `is_discounted`. Audited across all 19 Neon
+// DBs (2026-07): most scrapers leave that flag NULL while still populating
+// promo_price — ~111k available offers across 10 chains — so gating on the
+// flag silently served the HIGHER regular price (avg ~20-24% too high) for
+// every one of them. The inverse also exists (drogasil/drogaraia set the flag
+// but leave promo_price empty), which the promo>0 guard already handles.
+// Requiring promo < regular keeps bad data (promo above regular) harmless.
 function effectivePrice(row) {
   const promo = Number(row.promo_price);
   const regular = Number(row.regular_price);
-  if (row.is_discounted && Number.isFinite(promo) && promo > 0) return promo;
-  return Number.isFinite(regular) && regular > 0 ? regular : null;
+  const promoValid = Number.isFinite(promo) && promo > 0;
+  const regularValid = Number.isFinite(regular) && regular > 0;
+  if (promoValid && (!regularValid || promo < regular)) return promo;
+  return regularValid ? regular : null;
 }
+
+// SQL mirror of effectivePrice(), for the price_history min/max aggregates.
+// Kept here as the single source of truth so both sync scripts stay in step
+// with the JS logic above — they previously had the same is_discounted bug,
+// which froze price_min_30d/price_max_30d (min==max for ~80% of products at
+// some stores) and made the price thermometer useless.
+const EFFECTIVE_PRICE_SQL = `case
+    when promo_price > 0 and (regular_price is null or regular_price <= 0 or promo_price < regular_price)
+      then promo_price
+    when regular_price > 0 then regular_price
+    else null
+  end`;
 
 function round2(n) {
   return Math.round(Number(n) * 100) / 100;
@@ -289,6 +313,7 @@ module.exports = {
   buildStoreRecentKey,
   buildRecentDocId,
   effectivePrice,
+  EFFECTIVE_PRICE_SQL,
   round2,
   initFirestore,
   createWriteBuffer,

@@ -154,8 +154,8 @@ async function syncStore(db, mirror, writer, storeConfig, budget, report) {
       if (eans.length > 0) {
         const { rows: aggRows } = await client.query(
           `select ean,
-                  min(case when is_discounted and promo_price > 0 then promo_price else regular_price end) as min_price,
-                  max(case when is_discounted and promo_price > 0 then promo_price else regular_price end) as max_price
+                  min(${core.EFFECTIVE_PRICE_SQL}) as min_price,
+                  max(${core.EFFECTIVE_PRICE_SQL}) as max_price
            from price_history
            where ean = any($1) and store_id = $2
            group by ean`,
