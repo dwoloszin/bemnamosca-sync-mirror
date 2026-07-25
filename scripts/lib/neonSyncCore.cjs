@@ -242,7 +242,14 @@ async function recordStoreFreshness(writer, client, storeConfig) {
     console.warn(`[recordStoreFreshness] ${storeConfig.slug}: ${err.message}`);
     return;
   }
+  // Include the store identity fields too. ensureStoreDoc() only runs when a
+  // price is actually written, so a store with no price changes this run would
+  // otherwise get last_data_at but NO `source` — which made it invisible to
+  // the freshness monitor and unprotected by the isSyncedCatalogDoc() rule.
   writer.upsert('Store', buildStoreDocId(storeConfig.slug), {
+    name: storeConfig.displayName,
+    type: 'pharmacy_online',
+    source: 'neon_sync',
     last_data_at: lastDataAt,
     last_synced_at: new Date().toISOString(),
   });
