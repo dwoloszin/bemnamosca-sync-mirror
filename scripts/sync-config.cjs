@@ -11,7 +11,15 @@ module.exports = {
   // stores). Firestore's free tier allows 20,000 writes/day; this stays
   // safely under it, leaving headroom for normal app traffic the same day.
   // Raise/lower freely — nothing else in the sync depends on this number.
-  maxWritesPerRun: 1000,
+  //
+  // 2000 x 6 scheduled runs = 12,000/day = 60% of the 20k free-tier write
+  // quota, leaving ~8k/day for app traffic and the other scheduled jobs
+  // (~100/day). Raised from 1000 to halve the initial-backlog ETA (~10k
+  // (store,product) pairs ≈ 30k writes: ~5 days at 1000, ~2.5 at 2000).
+  // Going much higher has diminishing returns: dynamicBudgetSafetyPercent
+  // below caps each run at 75% of the day's REMAINING headroom, so once
+  // cumulative usage nears 15k the later runs get throttled anyway.
+  maxWritesPerRun: 2000,
 
   // How many `offers` rows to pull per store, per run, before diffing
   // against the mirror. Kept well above maxWritesPerRun because most rows
