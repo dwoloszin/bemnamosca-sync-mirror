@@ -158,11 +158,47 @@ async function discoverHighValueBarcodes(clients, activeStores, report) {
 }
 
 // ── Phase 2: for a list of barcodes, fetch + diff + write from every store ──
+//
+// RESUME CURSOR: this used to be stateless, processing the tier price-descending
+// from index 0 every run. Once the write budget was exhausted near the top of
+// the list (which it is on every run while there's a backlog), the remaining
+// barcodes were never reached — they were starved indefinitely, not merely
+// delayed. Measured 2026-07: 4063 qualifying products, only 643 in Firestore.
+// Now each tier keeps a cursor in the mirror state and the next run continues
+// where the last one stopped, wrapping around after a full pass. Ordering
+// within a tier is by barcode (stable across runs, so the cursor is meaningful);
+// price priority is still expressed by the tier split itself (>=1500 first).
 async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, barcodes, budget, report, tierLabel) {
-  for (const barcodeGroup of chunk(barcodes, CROSS_STORE_CHUNK_SIZE)) {
-    for (const storeConfig of activeStores) {
-      if (budget.writesUsed >= budget.maxWrites) return;
+  const cursorKey = `__highvalue_${tierLabel}__`;
+  const lastBarcode = String((mirror.getCursor(cursorKey) || {}).lastBarcode || '');
+  const sorted = [...barcodes].sort();
+  const resumeAt = lastBarcode ? sorted.findIndex((b) => b > lastBarcode) : 0;
+  const ordered = resumeAt > 0
+    ? [...sorted.slice(resumeAt), ...sorted.slice(0, resumeAt)]
+    : sorted;
 
+  let lastCompleted = lastBarcode;
+  let wrapped = false;
+  const saveCursor = (value, completedFullPass) => {
+    if (!args.apply) return;
+    mirror.setCursor(cursorKey, { lastBarcode: value, completedFullPass, updatedAt: new Date().toISOString() });
+  };
+
+  const perStoreStats = new Map(); // slug -> { scanned, changed }
+  const bumpStat = (slug, field) => {
+    if (!perStoreStats.has(slug)) perStoreStats.set(slug, { scanned: 0, changed: 0 });
+    perStoreStats.get(slug)[field] += 1;
+  };
+  const storeDocEnsured = new Set();
+
+  for (const barcodeGroup of chunk(ordered, CROSS_STORE_CHUNK_SIZE)) {
+    // Phase A — collect this chunk's rows from EVERY store first (2 queries per
+    // store), grouped by barcode. Processing barcode-major (rather than
+    // store-major) is what lets the cursor advance one barcode at a time: a
+    // chunk of 500 barcodes x 19 stores could need ~28k writes against a 1k
+    // budget, so a chunk-boundary cursor would never advance at all.
+    const byBarcode = new Map();
+    for (const storeConfig of activeStores) {
       const client = clients.get(storeConfig.slug);
       const { rows } = await client.query(
         `select product_id, product_name, brand, ean, regular_price, promo_price,
@@ -188,22 +224,34 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
         aggRows.forEach((r) => minMaxByEan.set(r.ean, { min: Number(r.min_price), max: Number(r.max_price) }));
       }
 
-      const storeId = core.buildStoreDocId(storeConfig.slug);
-      let storeDocEnsured = false;
-      let storeScanned = 0;
-      let storeChanged = 0;
-
       for (const row of rows) {
-        if (budget.writesUsed >= budget.maxWrites) break;
-        storeScanned += 1;
-
         const barcode = core.normalizeBarcode(row.ean);
         if (!core.isValidBarcode(barcode, syncConfig.barcode)) { report.invalidBarcodes += 1; continue; }
+        if (!byBarcode.has(barcode)) byBarcode.set(barcode, []);
+        byBarcode.get(barcode).push({ storeConfig, row, agg: minMaxByEan.get(row.ean) });
+      }
+    }
+
+    // Phase B — walk the chunk in barcode order, writing every store's price
+    // for a barcode before moving on. Budget is checked per barcode, so the
+    // cursor always stops on a fully-completed barcode.
+    for (const barcode of barcodeGroup) {
+      if (budget.writesUsed >= budget.maxWrites) {
+        // Persist where we stopped so the next run picks up from here
+        // instead of restarting at the top of the tier.
+        saveCursor(lastCompleted, false);
+        report.resumeFrom = report.resumeFrom || {};
+        report.resumeFrom[tierLabel] = lastCompleted || '(start)';
+        for (const [slug, st] of perStoreStats) report.crossCheckByStore.push({ slug, tier: tierLabel, ...st });
+        return;
+      }
+
+      for (const { storeConfig, row, agg } of byBarcode.get(barcode) || []) {
+        bumpStat(storeConfig.slug, 'scanned');
 
         const price = core.effectivePrice(row);
         if (price === null) { report.invalidPrice += 1; continue; }
 
-        const agg = minMaxByEan.get(row.ean);
         const min = agg && Number.isFinite(agg.min) ? core.round2(Math.min(agg.min, price)) : core.round2(price);
         const max = agg && Number.isFinite(agg.max) ? core.round2(Math.max(agg.max, price)) : core.round2(price);
         const priceRounded = core.round2(price);
@@ -216,13 +264,13 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
         if (unchanged) continue;
 
         const isNewProduct = !previous;
-        const nowIso = new Date().toISOString();
+        const storeId = core.buildStoreDocId(storeConfig.slug);
 
         if (args.apply) {
-          if (!storeDocEnsured) {
+          if (!storeDocEnsured.has(storeConfig.slug)) {
             core.ensureStoreDoc(writer, storeId, storeConfig);
             budget.writesUsed += 1;
-            storeDocEnsured = true;
+            storeDocEnsured.add(storeConfig.slug);
           }
           core.writePriceTriplet(writer, { storeId, storeConfig, barcode, row, priceRounded, min, max, isNewProduct });
           budget.writesUsed += 3;
@@ -231,20 +279,28 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
           mirror.set(storeConfig.slug, barcode, {
             price: priceRounded, min, max,
             productName: String(row.product_name || '').trim(),
-            updatedAt: nowIso,
+            updatedAt: new Date().toISOString(),
           });
         } else {
           budget.writesUsed += 3; // dry-run estimate: Product + StoreRecentPriceEntry + PriceEntry
         }
 
-        storeChanged += 1;
+        bumpStat(storeConfig.slug, 'changed');
       }
 
-      if (storeScanned > 0) {
-        report.crossCheckByStore.push({ slug: storeConfig.slug, tier: tierLabel, scanned: storeScanned, changed: storeChanged });
-      }
+      // Barcode fully handled across all stores — safe resume point.
+      lastCompleted = barcode;
+      if (lastBarcode && barcode >= lastBarcode) wrapped = true;
     }
   }
+
+  for (const [slug, st] of perStoreStats) report.crossCheckByStore.push({ slug, tier: tierLabel, ...st });
+
+  // Reached the end of the tier within budget → full pass complete, start over
+  // from the beginning next run so refreshed prices get picked up.
+  saveCursor('', true);
+  report.fullPass = report.fullPass || {};
+  report.fullPass[tierLabel] = wrapped ? 'completed (wrapped)' : 'completed';
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -364,6 +420,12 @@ async function main() {
     console.log(`  Invalid barcodes skipped: ${report.invalidBarcodes}`);
     console.log(`  Invalid/missing price skipped: ${report.invalidPrice}`);
     console.log(`  Firestore writes ${args.apply ? 'performed' : 'estimated'}: ${budget.writesUsed} / ${effectiveMaxWrites}`);
+    if (report.fullPass) {
+      for (const [tier, state] of Object.entries(report.fullPass)) console.log(`  Tier "${tier}": full pass ${state}`);
+    }
+    if (report.resumeFrom) {
+      for (const [tier, at] of Object.entries(report.resumeFrom)) console.log(`  Tier "${tier}": budget hit — next run resumes after barcode ${at}`);
+    }
     console.log(`  Mirror commit/push: ${gitResult.pushed ? 'OK' : `skipped (${gitResult.reason})`}`);
     if (!args.apply) {
       console.log('\n  Dry-run only — re-run with --apply to write to Firestore and update the mirror.');
