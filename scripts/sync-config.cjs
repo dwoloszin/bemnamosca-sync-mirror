@@ -90,6 +90,8 @@ module.exports = {
     { slug: 'panvel', displayName: 'Panvel', envVar: 'NEON_DATABASE_URL_PANVEL' },
     { slug: 'farmaciasapp', displayName: 'Farmácias APP', envVar: 'NEON_DATABASE_URL_FARMACIASAPP' },
     { slug: 'farmaconde', displayName: 'Farmaconde', envVar: 'NEON_DATABASE_URL_FARMACONDE' },
+    { slug: 'pacheco', displayName: 'Drogaria Pacheco', envVar: 'NEON_DATABASE_URL_PACHECO' },
+
     // Smaller / regional chains
     { slug: 'eualiria', displayName: 'Eu Aliria', envVar: 'NEON_DATABASE_URL_EUALIRIA' },
     { slug: 'agillemed', displayName: 'Agille Med', envVar: 'NEON_DATABASE_URL_AGILLEMED' },
@@ -100,5 +102,21 @@ module.exports = {
     { slug: 'levitta', displayName: 'Levitta', envVar: 'NEON_DATABASE_URL_LEVITTA' },
     { slug: 'dinamica', displayName: 'Dinâmica', envVar: 'NEON_DATABASE_URL_DINAMICA' },
     { slug: 'facilita', displayName: 'Facilita', envVar: 'NEON_DATABASE_URL_FACILITA' },
+    { slug: 'mevofarma', displayName: 'Mevofarma', envVar: 'NEON_DATABASE_URL_MEVOFARMA' },
+    { slug: 'singular', displayName: 'Singular', envVar: 'NEON_DATABASE_URL_SINGULAR' },
+    { slug: 'mundial', displayName: 'Mundial', envVar: 'NEON_DATABASE_URL_MUNDIAL' },
+    { slug: 'remed', displayName: 'Remed', envVar: 'NEON_DATABASE_URL_REMED' },
+    { slug: 'fast', displayName: 'Fast', envVar: 'NEON_DATABASE_URL_FAST' },
+    { slug: 'progoods', displayName: 'ProGoods', envVar: 'NEON_DATABASE_URL_PROGOODS' },
+    { slug: 'hera', displayName: 'Hera', envVar: 'NEON_DATABASE_URL_HERA' },
+    { slug: 'campea', displayName: 'Campeã', envVar: 'NEON_DATABASE_URL_CAMPEA' },
+    { slug: 'integral', displayName: 'Integral', envVar: 'NEON_DATABASE_URL_INTEGRAL' },
+    { slug: 'qualidoc', displayName: 'Qualidoc', envVar: 'NEON_DATABASE_URL_QUALIDOC' },
+    { slug: 'alianza', displayName: 'Alianza', envVar: 'NEON_DATABASE_URL_ALIANZA' },
+
+    // Oncology-focused
+    { slug: 'oncoexpresso', displayName: 'Onco Expresso', envVar: 'NEON_DATABASE_URL_ONCOEXPRESSO' },
+    { slug: 'oncohealthmedicamentos', displayName: 'Onco Health Medicamentos', envVar: 'NEON_DATABASE_URL_ONCOHEALTHMEDICAMENTOS' },
+    { slug: 'lj_oncoexpress', displayName: 'LJ Onco Express', envVar: 'NEON_DATABASE_URL_LJ_ONCOEXPRESS' },
   ],
 };

@@ -126,20 +126,48 @@ function chunk(arr, size) {
   return out;
 }
 
+// A barcode only counts as high-value if its top price isn't an obvious
+// data error. Measured 2026-07: 370 of 4433 qualifying barcodes (8.3%) had a
+// max >= 10x their min across stores — e.g. a R$52 toy listed at R$2900 by
+// one store, or R$17.99 vs R$1962 across 26 listings. Those single bad rows
+// dragged cheap products into the high-value catalog. Compared against the
+// MEDIAN (robust to outliers, unlike the mean) and only when there are enough
+// listings to judge; genuine price spread between pharmacies is nowhere near
+// this factor, so legitimate expensive drugs are unaffected.
+const OUTLIER_MAX_OVER_MEDIAN = Number.parseFloat(process.env.OUTLIER_MAX_OVER_MEDIAN || '10') || 10;
+const OUTLIER_MIN_LISTINGS = 3;
+
+function median(nums) {
+  const a = [...nums].sort((x, y) => x - y);
+  const mid = Math.floor(a.length / 2);
+  return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
+}
+
 // ── Phase 1: discover barcodes priced >= MIN_VALUE anywhere ─────────────────
 async function discoverHighValueBarcodes(clients, activeStores, report) {
   const maxPriceByBarcode = new Map();
 
   for (const storeConfig of activeStores) {
     const client = clients.get(storeConfig.slug);
-    const { rows } = await client.query(
-      `select ean, (${core.EFFECTIVE_PRICE_SQL}) as eff_price
-       from offers
-       where is_available = true
-         and ean is not null and ean <> ''
-         and (${core.EFFECTIVE_PRICE_SQL}) >= $1`,
-      [MIN_VALUE]
-    );
+    if (!client) continue; // connection failed earlier — already reported
+    // Isolate per-store failures: one chain's DB being unreachable, mid-
+    // migration, or missing the `offers` table must not abort the whole run
+    // and stall price updates for every other chain.
+    let rows;
+    try {
+      ({ rows } = await client.query(
+        `select ean, (${core.EFFECTIVE_PRICE_SQL}) as eff_price
+         from offers
+         where is_available = true
+           and ean is not null and ean <> ''
+           and (${core.EFFECTIVE_PRICE_SQL}) >= $1`,
+        [MIN_VALUE]
+      ));
+    } catch (err) {
+      console.warn(`  ${storeConfig.slug}: discovery failed — ${err.message}`);
+      report.failedStores.push(`${storeConfig.slug} (discovery: ${err.message})`);
+      continue;
+    }
 
     let storeDiscovered = 0;
     for (const row of rows) {
@@ -202,33 +230,58 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
     const byBarcode = new Map();
     for (const storeConfig of activeStores) {
       const client = clients.get(storeConfig.slug);
-      const { rows } = await client.query(
-        `select product_id, product_name, brand, ean, regular_price, promo_price,
-                is_discounted, is_available, unit, product_url, image_url, updated_at
-         from offers
-         where is_available = true and ean = any($1)`,
-        [barcodeGroup]
-      );
-      if (rows.length === 0) continue;
+      if (!client) continue; // connection failed earlier — already reported
 
-      const eans = [...new Set(rows.map((r) => core.normalizeBarcode(r.ean)).filter((b) => core.isValidBarcode(b, syncConfig.barcode)))];
+      // Same per-store isolation as discovery: skip a failing chain for this
+      // chunk instead of aborting the run for every chain.
+      let rows;
       const minMaxByEan = new Map();
-      if (eans.length > 0) {
-        const { rows: aggRows } = await client.query(
-          `select ean,
-                  min(${core.EFFECTIVE_PRICE_SQL}) as min_price,
-                  max(${core.EFFECTIVE_PRICE_SQL}) as max_price
-           from price_history
-           where ean = any($1) and store_id = $2
-           group by ean`,
-          [eans, storeConfig.slug]
-        );
-        aggRows.forEach((r) => minMaxByEan.set(r.ean, { min: Number(r.min_price), max: Number(r.max_price) }));
+      try {
+        ({ rows } = await client.query(
+          `select product_id, product_name, brand, ean, regular_price, promo_price,
+                  is_discounted, is_available, unit, product_url, image_url, updated_at
+           from offers
+           where is_available = true and ean = any($1)`,
+          [barcodeGroup]
+        ));
+        if (rows.length === 0) continue;
+
+        const eans = [...new Set(rows.map((r) => core.normalizeBarcode(r.ean)).filter((b) => core.isValidBarcode(b, syncConfig.barcode)))];
+        if (eans.length > 0) {
+          const { rows: aggRows } = await client.query(
+            `select ean,
+                    min(${core.EFFECTIVE_PRICE_SQL}) as min_price,
+                    max(${core.EFFECTIVE_PRICE_SQL}) as max_price
+             from price_history
+             where ean = any($1) and store_id = $2
+             group by ean`,
+            [eans, storeConfig.slug]
+          );
+          aggRows.forEach((r) => minMaxByEan.set(r.ean, { min: Number(r.min_price), max: Number(r.max_price) }));
+        }
+      } catch (err) {
+        console.warn(`  ${storeConfig.slug}: cross-check failed — ${err.message}`);
+        if (!report.failedStores.some((s) => s.startsWith(storeConfig.slug + ' '))) {
+          report.failedStores.push(`${storeConfig.slug} (cross-check: ${err.message})`);
+        }
+        continue;
       }
 
+      // A store can list the same EAN on several rows (measured: 109k such
+      // rows across all chains) — variants, or scraper duplicates. Keep only
+      // the CHEAPEST per (store, barcode): it's the price the customer can
+      // actually pay, and it makes the write deterministic instead of
+      // "whichever row happened to come last".
+      const cheapestForStore = new Map();
       for (const row of rows) {
         const barcode = core.normalizeBarcode(row.ean);
         if (!core.isValidBarcode(barcode, syncConfig.barcode)) { report.invalidBarcodes += 1; continue; }
+        const price = core.effectivePrice(row);
+        if (price === null) continue;
+        const held = cheapestForStore.get(barcode);
+        if (!held || price < held.price) cheapestForStore.set(barcode, { price, row });
+      }
+      for (const [barcode, { row }] of cheapestForStore) {
         if (!byBarcode.has(barcode)) byBarcode.set(barcode, []);
         byBarcode.get(barcode).push({ storeConfig, row, agg: minMaxByEan.get(row.ean) });
       }
@@ -262,7 +315,57 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
         break;
       }
 
-      for (const { storeConfig, row, agg } of byBarcode.get(barcode) || []) {
+      const entries = byBarcode.get(barcode) || [];
+
+      // Re-validate the high-value threshold against the DEDUPED prices.
+      // Phase 1 discovery sees raw rows, so a store's duplicate row with a
+      // bogus price (e.g. a R$52 toy also listed at R$2900) can qualify a
+      // barcode that isn't actually high-value. Once we keep only the
+      // cheapest row per store, that inflated price is gone — so if nothing
+      // reaches MIN_VALUE any more, the product doesn't belong in the catalog.
+      //
+      // Applies to BOTH phases on purpose. Skipping only 'new' would leave
+      // already-synced sub-threshold products being re-priced forever, which
+      // keeps bumping their date_recorded — and orphanDataCleanupScheduler
+      // deletes on staleness, so they'd never age out and never be removed.
+      // (prune-discontinued can't help either: these products are still
+      // is_available=true in Neon, just cheap.) Freezing them here lets the
+      // 14-day orphan cleanup retire the ones already in Firestore, so the
+      // catalog self-heals instead of needing a manual purge.
+      if (entries.length > 0) {
+        const realMax = Math.max(...entries.map((e) => core.effectivePrice(e.row) ?? 0));
+        if (realMax < MIN_VALUE) {
+          if (phase === 'new') {
+            report.belowThresholdSkipped = (report.belowThresholdSkipped || 0) + 1;
+            lastCompleted = barcode;
+          }
+          continue;
+        }
+      }
+
+      // Reject barcodes pulled in by an obviously wrong price. All stores'
+      // prices for this barcode are already in hand, so this costs no extra
+      // query. Skipping here means no Firestore write at all for the barcode.
+      if (entries.length >= OUTLIER_MIN_LISTINGS) {
+        const prices = entries.map((e) => core.effectivePrice(e.row)).filter((p) => p !== null && p > 0);
+        if (prices.length >= OUTLIER_MIN_LISTINGS) {
+          const med = median(prices);
+          const mx = Math.max(...prices);
+          if (med > 0 && mx / med >= OUTLIER_MAX_OVER_MEDIAN) {
+            if (phase === 'new') {
+              report.outlierSkipped = (report.outlierSkipped || 0) + 1;
+              if (!report.outlierExamples) report.outlierExamples = [];
+              if (report.outlierExamples.length < 5) {
+                report.outlierExamples.push(`${barcode} (max ${mx} vs median ${med})`);
+              }
+              lastCompleted = barcode;
+            }
+            continue;
+          }
+        }
+      }
+
+      for (const { storeConfig, row, agg } of entries) {
         if (phase === 'new') bumpStat(storeConfig.slug, 'scanned');
 
         const price = core.effectivePrice(row);
@@ -368,7 +471,7 @@ async function main() {
   const mirror = new SyncMirror(path.join(ROOT, syncConfig.mirror.localPath));
   const writer = core.createWriteBuffer(db, syncConfig.writeBatchSize);
 
-  const report = { discoveryByStore: [], crossCheckByStore: [], skippedStores: [], invalidBarcodes: 0, invalidPrice: 0 };
+  const report = { discoveryByStore: [], crossCheckByStore: [], skippedStores: [], failedStores: [], invalidBarcodes: 0, invalidPrice: 0 };
   const activeStores = syncConfig.stores.filter((s) => !!process.env[s.envVar]);
   for (const storeConfig of syncConfig.stores) {
     if (!process.env[storeConfig.envVar]) report.skippedStores.push(`${storeConfig.slug} (no ${storeConfig.envVar})`);
@@ -381,9 +484,18 @@ async function main() {
   const clients = new Map();
   for (const storeConfig of activeStores) {
     const client = new Client({ connectionString: process.env[storeConfig.envVar], ssl: { rejectUnauthorized: false } });
-    await client.connect();
-    clients.set(storeConfig.slug, client);
+    try {
+      await client.connect();
+      clients.set(storeConfig.slug, client);
+    } catch (err) {
+      // A single unreachable/misconfigured DB must not abort the run for all
+      // the others — record it and carry on without that store.
+      console.warn(`  ${storeConfig.slug}: connection failed — ${err.message}`);
+      report.failedStores.push(`${storeConfig.slug} (connect: ${err.message})`);
+      await client.end().catch(() => {});
+    }
   }
+  if (clients.size === 0) throw new Error('No store databases could be reached.');
 
   try {
     const budget = { writesUsed: 0, maxWrites: effectiveMaxWrites };
@@ -451,7 +563,17 @@ async function main() {
     if (report.skippedStores.length > 0) {
       console.log(`  Skipped: ${report.skippedStores.join(', ')}`);
     }
+    if (report.failedStores.length > 0) {
+      console.log(`  FAILED (isolated, run continued): ${report.failedStores.join('; ')}`);
+    }
     console.log(`  Invalid barcodes skipped: ${report.invalidBarcodes}`);
+    if (report.belowThresholdSkipped) {
+      console.log(`  Below MIN_VALUE after de-duplication (not created): ${report.belowThresholdSkipped}`);
+    }
+    if (report.outlierSkipped) {
+      console.log(`  Outlier prices rejected (>=${OUTLIER_MAX_OVER_MEDIAN}x median, likely bad data): ${report.outlierSkipped}`);
+      (report.outlierExamples || []).forEach((e) => console.log(`    e.g. ${e}`));
+    }
     console.log(`  Invalid/missing price skipped: ${report.invalidPrice}`);
     console.log(`  Firestore writes ${args.apply ? 'performed' : 'estimated'}: ${budget.writesUsed} / ${effectiveMaxWrites}`);
     if (report.fullPass) {
