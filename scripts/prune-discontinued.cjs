@@ -44,7 +44,15 @@ const ROOT = path.resolve(__dirname, '..');
 // Local runs read secrets from .env.local; CI sets them in the workflow env
 // (dotenv may not be installed there, and never overrides existing vars).
 try { require('dotenv').config({ path: path.resolve(ROOT, '.env.local') }); } catch { /* CI: env already set */ }
-const DEFAULT_GRACE_DAYS = 7;
+// Days a product must be continuously unavailable before its price entry is
+// deleted. Lowered 7 -> 3 because 7 days of showing a product a customer
+// cannot actually buy is worse for them than briefly dropping one that comes
+// back: scrape cycles run every 3-8h, so 3 days is 9-24 consecutive
+// unavailable observations — conclusive, not a blip. A returning product is
+// simply re-created on the next sync (3 writes), and a scraper OUTAGE cannot
+// trigger false deletions because stale flags keep their last value, so
+// previously-available rows are never stamped as missing.
+const DEFAULT_GRACE_DAYS = 3;
 const DEFAULT_MAX_DELETES = 10000;   // hard ceiling before the dynamic cap
 const SAFETY_PERCENT = 75;           // matches the sync's write-budget safety margin
 const NEON_BATCH = 5000;             // barcodes per Neon `= any($1)` query

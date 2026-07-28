@@ -149,19 +149,26 @@ async function syncStore(db, mirror, writer, storeConfig, budget, report) {
       }
 
       // Batch min/max lookup from price_history for this page's barcodes.
+      // Only availability-true history counts — the 30-day range must reflect
+      // prices a customer could actually have paid. Degrades to "no range"
+      // (caller falls back to the current price) rather than failing the run.
       const eans = [...new Set(rows.map((r) => normalizeBarcode(r.ean)).filter(isValidBarcode))];
       const minMaxByEan = new Map();
       if (eans.length > 0) {
-        const { rows: aggRows } = await client.query(
-          `select ean,
-                  min(${core.EFFECTIVE_PRICE_SQL}) as min_price,
-                  max(${core.EFFECTIVE_PRICE_SQL}) as max_price
-           from price_history
-           where ean = any($1) and store_id = $2
-           group by ean`,
-          [eans, storeConfig.slug]
-        );
-        aggRows.forEach((r) => minMaxByEan.set(r.ean, { min: Number(r.min_price), max: Number(r.max_price) }));
+        try {
+          const { rows: aggRows } = await client.query(
+            `select ean,
+                    min(${core.EFFECTIVE_PRICE_SQL}) as min_price,
+                    max(${core.EFFECTIVE_PRICE_SQL}) as max_price
+             from price_history
+             where ean = any($1) and store_id = $2 and is_available = true
+             group by ean`,
+            [eans, storeConfig.slug]
+          );
+          aggRows.forEach((r) => minMaxByEan.set(r.ean, { min: Number(r.min_price), max: Number(r.max_price) }));
+        } catch (histErr) {
+          console.warn(`  ${storeConfig.slug}: price_history min/max unavailable — ${histErr.message}`);
+        }
       }
 
       for (const row of rows) {

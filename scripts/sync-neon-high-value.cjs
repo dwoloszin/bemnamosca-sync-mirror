@@ -137,6 +137,13 @@ function chunk(arr, size) {
 const OUTLIER_MAX_OVER_MEDIAN = Number.parseFloat(process.env.OUTLIER_MAX_OVER_MEDIAN || '10') || 10;
 const OUTLIER_MIN_LISTINGS = 3;
 
+// How far a row's updated_at may lag its OWN store's newest updated_at before
+// we stop trusting its `is_available` flag. Scrape cycles run every 3-8h, so
+// 48h means 6-16 missed refreshes for that row while the store kept updating —
+// conclusively abandoned, not a blip. See the query comment for why this is
+// measured against the store's max rather than wall-clock time.
+const STALE_ROW_LAG_HOURS = Number.parseFloat(process.env.STALE_ROW_LAG_HOURS || '48') || 48;
+
 function median(nums) {
   const a = [...nums].sort((x, y) => x - y);
   const mid = Math.floor(a.length / 2);
@@ -237,27 +244,53 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
       let rows;
       const minMaxByEan = new Map();
       try {
+        // Defence-in-depth on availability. `is_available = true` is the
+        // primary signal and the scrapers maintain it well (measured: every
+        // available row is refreshed within 24h, and they already flag tens of
+        // thousands as unavailable). This second condition only catches a row
+        // the scraper left flagged available but stopped refreshing — i.e. if
+        // that upstream behaviour ever regresses.
+        //
+        // Crucially it compares against the STORE'S OWN newest updated_at, not
+        // wall-clock time. If a whole scraper dies, every row ages together so
+        // the lag stays ~0 and nothing is excluded — whereas a wall-clock rule
+        // would mark that entire chain unavailable and let the prune delete its
+        // whole catalog from Firestore. Today this excludes 0 rows.
         ({ rows } = await client.query(
           `select product_id, product_name, brand, ean, regular_price, promo_price,
                   is_discounted, is_available, unit, product_url, image_url, updated_at
            from offers
-           where is_available = true and ean = any($1)`,
-          [barcodeGroup]
+           where is_available = true
+             and ean = any($1)
+             and updated_at >= (select max(updated_at) from offers) - ($2::text || ' hours')::interval`,
+          [barcodeGroup, String(STALE_ROW_LAG_HOURS)]
         ));
         if (rows.length === 0) continue;
 
         const eans = [...new Set(rows.map((r) => core.normalizeBarcode(r.ean)).filter((b) => core.isValidBarcode(b, syncConfig.barcode)))];
         if (eans.length > 0) {
-          const { rows: aggRows } = await client.query(
-            `select ean,
-                    min(${core.EFFECTIVE_PRICE_SQL}) as min_price,
-                    max(${core.EFFECTIVE_PRICE_SQL}) as max_price
-             from price_history
-             where ean = any($1) and store_id = $2
-             group by ean`,
-            [eans, storeConfig.slug]
-          );
-          aggRows.forEach((r) => minMaxByEan.set(r.ean, { min: Number(r.min_price), max: Number(r.max_price) }));
+          // The 30-day min/max must only count prices a customer could
+          // actually have paid, so unavailable history is excluded (measured:
+          // 25% of qualidoc's price_history rows are is_available=false).
+          //
+          // Wrapped in its OWN try/catch: a min/max failure must degrade to
+          // "no range" (the caller falls back to the current price) rather
+          // than abort the whole store for this chunk, which would silently
+          // stop syncing its prices.
+          try {
+            const { rows: aggRows } = await client.query(
+              `select ean,
+                      min(${core.EFFECTIVE_PRICE_SQL}) as min_price,
+                      max(${core.EFFECTIVE_PRICE_SQL}) as max_price
+               from price_history
+               where ean = any($1) and store_id = $2 and is_available = true
+               group by ean`,
+              [eans, storeConfig.slug]
+            );
+            aggRows.forEach((r) => minMaxByEan.set(r.ean, { min: Number(r.min_price), max: Number(r.max_price) }));
+          } catch (histErr) {
+            console.warn(`  ${storeConfig.slug}: price_history min/max unavailable — ${histErr.message}`);
+          }
         }
       } catch (err) {
         console.warn(`  ${storeConfig.slug}: cross-check failed — ${err.message}`);
