@@ -1,7 +1,12 @@
 {
   "__highvalue_priority__": {
-    "lastBarcode": "7898054580110",
+    "lastBarcode": "",
+    "completedFullPass": true,
+    "updatedAt": "2026-07-28T07:26:10.556Z"
+  },
+  "__highvalue_standard__": {
+    "lastBarcode": "3349668630264",
     "completedFullPass": false,
-    "updatedAt": "2026-07-27T19:01:07.535Z"
+    "updatedAt": "2026-07-28T07:26:11.700Z"
   }
 }
