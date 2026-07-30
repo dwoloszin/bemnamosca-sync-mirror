@@ -14,6 +14,19 @@ const admin = require('firebase-admin');
 
 const STORE_RECENT_PRICE_COLLECTION = 'StoreRecentPriceEntry';
 
+// Attribution for everything the automatic price sync writes. Without these
+// fields the UI's user-tag falls back to "Anonymous", which reads as untrusted
+// user-submitted data when it's actually our own verified pipeline.
+//
+// The id matches PRICE_DROP_SKIP_ACTOR_IDS' default in functions/index.js
+// ('bemnamosc4'), which is the actor the backend already treats as the bulk
+// importer — so it stays exempt from the per-user daily quota. Override with
+// SYNC_ACTOR_ID / SYNC_ACTOR_NAME if that id ever changes; keep it in step
+// with PRICE_DROP_SKIP_ACTOR_IDS or synced writes would start counting against
+// a real user's quota.
+const SYNC_ACTOR_ID = String(process.env.SYNC_ACTOR_ID || 'bemnamosc4').trim();
+const SYNC_ACTOR_NAME = String(process.env.SYNC_ACTOR_NAME || 'BemnaMosc4').trim();
+
 function normalizeBarcode(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -163,6 +176,8 @@ function writePriceTriplet(writer, { storeId, storeConfig, barcode, row, priceRo
       name_lower: productName.toLowerCase(),
       image_url: String(row.image_url || '').trim(),
       created_date: nowIso,
+      created_by: SYNC_ACTOR_ID,
+      created_by_name: SYNC_ACTOR_NAME,
     } : {}),
     price_summary: {
       latest_price: priceRounded,
@@ -173,6 +188,8 @@ function writePriceTriplet(writer, { storeId, storeConfig, barcode, row, priceRo
     price_min_30d: min,
     price_max_30d: max,
     updated_date: nowIso,
+    updated_by: SYNC_ACTOR_ID,
+    updated_by_name: SYNC_ACTOR_NAME,
     source: 'neon_sync',
   });
 
@@ -190,6 +207,10 @@ function writePriceTriplet(writer, { storeId, storeConfig, barcode, row, priceRo
     date_recorded: dateOnly,
     recent_sort_date: nowIso,
     updated_date: nowIso,
+    created_by: SYNC_ACTOR_ID,
+    created_by_name: SYNC_ACTOR_NAME,
+    updated_by: SYNC_ACTOR_ID,
+    updated_by_name: SYNC_ACTOR_NAME,
     source: 'neon_sync',
   });
 
@@ -205,6 +226,10 @@ function writePriceTriplet(writer, { storeId, storeConfig, barcode, row, priceRo
     date_recorded: dateOnly,
     created_date: nowIso,
     updated_date: nowIso,
+    created_by: SYNC_ACTOR_ID,
+    created_by_name: SYNC_ACTOR_NAME,
+    updated_by: SYNC_ACTOR_ID,
+    updated_by_name: SYNC_ACTOR_NAME,
     source: 'neon_sync',
     _bulk: true,
   });
