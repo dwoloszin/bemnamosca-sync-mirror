@@ -58,7 +58,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { Client } = require('pg');
 const syncConfig = require('./sync-config.cjs');
 const { SyncMirror } = require('./lib/syncMirror.cjs');
 const core = require('./lib/neonSyncCore.cjs');
@@ -150,19 +149,121 @@ function median(nums) {
   return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
 }
 
+// ── Neon connection manager ──────────────────────────────────────────────────
+//
+// Neon computes suspend, restart and occasionally drop sockets. `pg` surfaces
+// that as an ASYNCHRONOUS 'error' event on the Client — not as a rejection
+// from whatever query is in flight — and an EventEmitter with no 'error'
+// listener makes Node throw, which kills the process outright.
+//
+// That is exactly what took down the 06:30 UTC runs on 2026-07-29 and
+// 2026-07-31 (`Unhandled 'error' event: Connection terminated unexpectedly`,
+// 24s and 7s into the run). All 34 connections were opened up front and held
+// open for the whole run, so while one store was being queried the other 33
+// sat idle — and a single idle socket dying aborted every store's sync before
+// one write had landed, losing the mirror commit and the resume cursor too.
+//
+// This manager closes both holes:
+//   * every Client gets an 'error' listener, so a dropped socket degrades to
+//     one store being skipped instead of crashing the run;
+//   * connections are opened on demand and released the moment a store is
+//     done, shrinking the idle window from minutes to a single query;
+//   * a query that dies with the socket is retried once on a fresh connection,
+//     which is all a transient Neon blip needs.
+function createStoreConnections(report) {
+  const live = new Map();   // slug → connected Client
+  const dead = new Set();   // slug → unreachable, don't keep paying the timeout
+  let everConnected = false;
+
+  // One line per store in the summary, no matter how many chunks hit it.
+  const recordFailure = (slug, stage, message) => {
+    if (!report.failedStores.some((s) => s.startsWith(`${slug} `))) {
+      report.failedStores.push(`${slug} (${stage}: ${message})`);
+    }
+  };
+
+  const release = async (slug) => {
+    const client = live.get(slug);
+    live.delete(slug);
+    if (client) await client.end().catch(() => {});
+  };
+
+  const open = async (storeConfig) => {
+    // core.createNeonClient attaches the 'error' listener whose absence used
+    // to crash the run; the onDrop callback just forgets the dead client so
+    // the next acquire() opens a fresh one.
+    const client = core.createNeonClient(
+      process.env[storeConfig.envVar],
+      storeConfig.slug,
+      () => { if (live.get(storeConfig.slug) === client) live.delete(storeConfig.slug); },
+    );
+    await client.connect();
+    everConnected = true;
+    live.set(storeConfig.slug, client);
+    return client;
+  };
+
+  const acquire = async (storeConfig) => {
+    const slug = storeConfig.slug;
+    if (dead.has(slug)) return null;
+    if (live.has(slug)) return live.get(slug);
+    try {
+      return await open(storeConfig);
+    } catch (err) {
+      await release(slug);
+      // A second attempt costs one more handshake and rescues the common case
+      // of a compute that was cold when we first knocked.
+      try {
+        return await open(storeConfig);
+      } catch (retryErr) {
+        console.warn(`  ${slug}: connection failed — ${retryErr.message}`);
+        recordFailure(slug, 'connect', retryErr.message);
+        dead.add(slug);
+        return null;
+      }
+    }
+  };
+
+  const query = async (storeConfig, sql, params) => {
+    const slug = storeConfig.slug;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const client = await acquire(storeConfig);
+      if (!client) throw new Error('no usable connection');
+      try {
+        return await client.query(sql, params);
+      } catch (err) {
+        await release(slug);
+        if (attempt === 2 || !core.isConnectionError(err)) throw err;
+        console.warn(`  ${slug}: lost the connection mid-query (${err.message}) — reconnecting`);
+      }
+    }
+    throw new Error('unreachable');
+  };
+
+  return {
+    acquire,
+    query,
+    release,
+    recordFailure,
+    get everConnected() { return everConnected; },
+    async closeAll() {
+      for (const slug of [...live.keys()]) await release(slug);
+    },
+  };
+}
+
 // ── Phase 1: discover barcodes priced >= MIN_VALUE anywhere ─────────────────
-async function discoverHighValueBarcodes(clients, activeStores, report) {
+async function discoverHighValueBarcodes(conns, activeStores, report) {
   const maxPriceByBarcode = new Map();
 
   for (const storeConfig of activeStores) {
-    const client = clients.get(storeConfig.slug);
-    if (!client) continue; // connection failed earlier — already reported
     // Isolate per-store failures: one chain's DB being unreachable, mid-
     // migration, or missing the `offers` table must not abort the whole run
     // and stall price updates for every other chain.
     let rows;
     try {
-      ({ rows } = await client.query(
+      ({ rows } = await conns.query(
+        storeConfig,
         `select ean, (${core.EFFECTIVE_PRICE_SQL}) as eff_price
          from offers
          where is_available = true
@@ -172,8 +273,12 @@ async function discoverHighValueBarcodes(clients, activeStores, report) {
       ));
     } catch (err) {
       console.warn(`  ${storeConfig.slug}: discovery failed — ${err.message}`);
-      report.failedStores.push(`${storeConfig.slug} (discovery: ${err.message})`);
+      conns.recordFailure(storeConfig.slug, 'discovery', err.message);
       continue;
+    } finally {
+      // Discovery touches each store exactly once — hand the socket back
+      // immediately rather than letting it idle through every other store.
+      await conns.release(storeConfig.slug);
     }
 
     let storeDiscovered = 0;
@@ -203,7 +308,7 @@ async function discoverHighValueBarcodes(clients, activeStores, report) {
 // where the last one stopped, wrapping around after a full pass. Ordering
 // within a tier is by barcode (stable across runs, so the cursor is meaningful);
 // price priority is still expressed by the tier split itself (>=1500 first).
-async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, barcodes, budget, report, tierLabel) {
+async function crossCheckBarcodes(db, mirror, writer, conns, activeStores, barcodes, budget, report, tierLabel) {
   const cursorKey = `__highvalue_${tierLabel}__`;
   const lastBarcode = String((mirror.getCursor(cursorKey) || {}).lastBarcode || '');
   const sorted = [...barcodes].sort();
@@ -236,9 +341,6 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
     // budget, so a chunk-boundary cursor would never advance at all.
     const byBarcode = new Map();
     for (const storeConfig of activeStores) {
-      const client = clients.get(storeConfig.slug);
-      if (!client) continue; // connection failed earlier — already reported
-
       // Same per-store isolation as discovery: skip a failing chain for this
       // chunk instead of aborting the run for every chain.
       let rows;
@@ -256,7 +358,8 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
         // the lag stays ~0 and nothing is excluded — whereas a wall-clock rule
         // would mark that entire chain unavailable and let the prune delete its
         // whole catalog from Firestore. Today this excludes 0 rows.
-        ({ rows } = await client.query(
+        ({ rows } = await conns.query(
+          storeConfig,
           `select product_id, product_name, brand, ean, regular_price, promo_price,
                   is_discounted, is_available, unit, product_url, image_url, updated_at
            from offers
@@ -278,7 +381,8 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
           // than abort the whole store for this chunk, which would silently
           // stop syncing its prices.
           try {
-            const { rows: aggRows } = await client.query(
+            const { rows: aggRows } = await conns.query(
+              storeConfig,
               `select ean,
                       min(${core.EFFECTIVE_PRICE_SQL}) as min_price,
                       max(${core.EFFECTIVE_PRICE_SQL}) as max_price
@@ -294,10 +398,13 @@ async function crossCheckBarcodes(db, mirror, writer, clients, activeStores, bar
         }
       } catch (err) {
         console.warn(`  ${storeConfig.slug}: cross-check failed — ${err.message}`);
-        if (!report.failedStores.some((s) => s.startsWith(storeConfig.slug + ' '))) {
-          report.failedStores.push(`${storeConfig.slug} (cross-check: ${err.message})`);
-        }
+        conns.recordFailure(storeConfig.slug, 'cross-check', err.message);
         continue;
+      } finally {
+        // Both of this store's queries are done for this chunk. Releasing here
+        // means a store's socket is only ever open while it is being used, so
+        // there is nothing sitting idle for Neon to reap mid-run.
+        await conns.release(storeConfig.slug);
       }
 
       // A store can list the same EAN on several rows (measured: 109k such
@@ -514,21 +621,10 @@ async function main() {
     throw new Error('No stores have a configured Neon connection string.');
   }
 
-  const clients = new Map();
-  for (const storeConfig of activeStores) {
-    const client = new Client({ connectionString: process.env[storeConfig.envVar], ssl: { rejectUnauthorized: false } });
-    try {
-      await client.connect();
-      clients.set(storeConfig.slug, client);
-    } catch (err) {
-      // A single unreachable/misconfigured DB must not abort the run for all
-      // the others — record it and carry on without that store.
-      console.warn(`  ${storeConfig.slug}: connection failed — ${err.message}`);
-      report.failedStores.push(`${storeConfig.slug} (connect: ${err.message})`);
-      await client.end().catch(() => {});
-    }
-  }
-  if (clients.size === 0) throw new Error('No store databases could be reached.');
+  // Connections are opened on demand by the manager and released as soon as a
+  // store's query is done — see createStoreConnections for why holding all 34
+  // open for the whole run used to make one dropped socket fatal.
+  const conns = createStoreConnections(report);
 
   try {
     const budget = { writesUsed: 0, maxWrites: effectiveMaxWrites };
@@ -541,10 +637,10 @@ async function main() {
         throw new Error(`--barcode "${args.barcode}" is not a valid EAN (${syncConfig.barcode.minLength}-${syncConfig.barcode.maxLength} digits, not all zeros).`);
       }
       console.log(`\n-- Manual mode: cross-checking barcode ${barcode} against ${activeStores.length} store(s) --`);
-      await crossCheckBarcodes(db, mirror, writer, clients, activeStores, [barcode], budget, report, 'manual');
+      await crossCheckBarcodes(db, mirror, writer, conns, activeStores, [barcode], budget, report, 'manual');
     } else {
       console.log('\n-- Phase 1: discovery --');
-      const maxPriceByBarcode = await discoverHighValueBarcodes(clients, activeStores, report);
+      const maxPriceByBarcode = await discoverHighValueBarcodes(conns, activeStores, report);
       for (const s of report.discoveryByStore) {
         console.log(`  ${s.slug.padEnd(20)} found=${s.found}`);
       }
@@ -560,19 +656,31 @@ async function main() {
       console.log(`\nDiscovered ${maxPriceByBarcode.size} unique high-value barcode(s): ${highTier.length} priority (>= ${priorityThreshold}), ${normalTier.length} standard (>= ${MIN_VALUE})`);
 
       console.log('\n-- Phase 2: cross-store fetch (priority tier first) --');
-      await crossCheckBarcodes(db, mirror, writer, clients, activeStores, highTier.map((x) => x[0]), budget, report, 'priority');
+      await crossCheckBarcodes(db, mirror, writer, conns, activeStores, highTier.map((x) => x[0]), budget, report, 'priority');
       if (budget.writesUsed < budget.maxWrites) {
-        await crossCheckBarcodes(db, mirror, writer, clients, activeStores, normalTier.map((x) => x[0]), budget, report, 'standard');
+        await crossCheckBarcodes(db, mirror, writer, conns, activeStores, normalTier.map((x) => x[0]), budget, report, 'standard');
       } else {
         console.log('  Write budget exhausted by priority tier — standard tier deferred to next run.');
       }
     }
 
+    // Individual stores failing is survivable and reported; EVERY store failing
+    // means the run learned nothing, and must not be reported as a success.
+    // (This replaces the old up-front connect-them-all preflight — with lazy
+    // connections there is no earlier point at which this is knowable.)
+    if (!conns.everConnected) throw new Error('No store databases could be reached.');
+
     // Record data freshness for EVERY active store (not just ones with price
     // changes this run) so the freshness monitor can detect a dead scraper.
     if (args.apply) {
       for (const storeConfig of activeStores) {
-        await core.recordStoreFreshness(writer, clients.get(storeConfig.slug), storeConfig);
+        const client = await conns.acquire(storeConfig);
+        if (!client) continue; // unreachable this run — already in failedStores
+        try {
+          await core.recordStoreFreshness(writer, client, storeConfig);
+        } finally {
+          await conns.release(storeConfig.slug);
+        }
       }
     }
 
@@ -620,7 +728,7 @@ async function main() {
       console.log('\n  Dry-run only — re-run with --apply to write to Firestore and update the mirror.');
     }
   } finally {
-    for (const client of clients.values()) await client.end().catch(() => {});
+    await conns.closeAll();
   }
 }
 

@@ -41,7 +41,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { Client } = require('pg');
 const syncConfig = require('./sync-config.cjs');
 const { SyncMirror } = require('./lib/syncMirror.cjs');
 const core = require('./lib/neonSyncCore.cjs');
@@ -105,7 +104,10 @@ async function syncStore(db, mirror, writer, storeConfig, budget, report) {
     return;
   }
 
-  const client = new Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
+  // core.createNeonClient, never `new Client` — see its comment: without an
+  // 'error' listener a dropped Neon socket throws out of the process and
+  // kills the whole run instead of just this store.
+  const client = core.createNeonClient(url, storeConfig.slug);
   await client.connect();
 
   try {

@@ -11,8 +11,51 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const admin = require('firebase-admin');
+const { Client } = require('pg');
 
 const STORE_RECENT_PRICE_COLLECTION = 'StoreRecentPriceEntry';
+
+// ── Neon client factory ──────────────────────────────────────────────────────
+//
+// Never construct `new Client(...)` directly in a sync script. Neon computes
+// suspend, restart and occasionally drop sockets, and `pg` reports that as an
+// ASYNCHRONOUS 'error' event on the Client — not as a rejection from the query
+// in flight. A Client with no 'error' listener makes Node throw, killing the
+// whole process: that is what aborted the 06:30 UTC high-value sync runs on
+// 2026-07-29 and 2026-07-31 ("Unhandled 'error' event: Connection terminated
+// unexpectedly") before a single write had landed.
+//
+// The listener here turns that into a warning. The caller's existing
+// try/catch around its queries then handles the dead connection normally —
+// skip the store, or reconnect — instead of the run dying.
+const NEON_CONNECT_TIMEOUT_MS = Number.parseInt(process.env.NEON_CONNECT_TIMEOUT_MS || '20000', 10) || 20000;
+const NEON_QUERY_TIMEOUT_MS = Number.parseInt(process.env.NEON_QUERY_TIMEOUT_MS || '180000', 10) || 180000;
+
+function createNeonClient(connectionString, label, onDrop) {
+  const client = new Client({
+    connectionString,
+    ssl: { rejectUnauthorized: false },
+    keepAlive: true,                                  // stop idle sockets being reaped silently
+    connectionTimeoutMillis: NEON_CONNECT_TIMEOUT_MS,
+    query_timeout: NEON_QUERY_TIMEOUT_MS,
+  });
+  client.on('error', (err) => {
+    console.warn(`  ${label}: connection dropped — ${err.message}`);
+    if (typeof onDrop === 'function') {
+      try { onDrop(err, client); } catch { /* a drop handler must never throw */ }
+    }
+    client.end().catch(() => {});
+  });
+  return client;
+}
+
+// Errors that mean "this socket is gone" rather than "this SQL is wrong".
+// Only these are worth reconnecting for; a bad query would just fail twice.
+function isConnectionError(err) {
+  const msg = String(err?.message || '');
+  return /connection terminated|connection closed|server closed the connection|terminating connection|socket hang up|read ECONNRESET|Client has encountered a connection error|Connection ended/i.test(msg)
+    || ['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNREFUSED', '57P01', '57P02', '57P03'].includes(String(err?.code || ''));
+}
 
 // Attribution for everything the automatic price sync writes. Without these
 // fields the UI's user-tag falls back to "Anonymous", which reads as untrusted
@@ -337,6 +380,8 @@ async function computeDynamicWriteBudget(db, requestedMax, safetyPercent) {
 
 module.exports = {
   STORE_RECENT_PRICE_COLLECTION,
+  createNeonClient,
+  isConnectionError,
   normalizeBarcode,
   isValidBarcode,
   buildProductDocId,

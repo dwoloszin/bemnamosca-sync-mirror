@@ -34,7 +34,6 @@
 // ──────────────────────────────────────────────────────────
 
 const path = require('path');
-const { Client } = require('pg');
 const syncConfig = require('./sync-config.cjs');
 const core = require('./lib/neonSyncCore.cjs');
 const { SyncMirror } = require('./lib/syncMirror.cjs');
@@ -128,7 +127,9 @@ async function run() {
 
     // Which of the tracked barcodes are still available at this store?
     const availableSet = new Set();
-    const client = new Client({ connectionString: process.env[storeConfig.envVar], ssl: { rejectUnauthorized: false } });
+    // core.createNeonClient, never `new Client` — a Neon socket dropped
+    // mid-loop must skip this store, not crash the prune run.
+    const client = core.createNeonClient(process.env[storeConfig.envVar], slug);
     try {
       await client.connect();
       for (let i = 0; i < tracked.length; i += NEON_BATCH) {
