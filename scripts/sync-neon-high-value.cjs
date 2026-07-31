@@ -216,8 +216,9 @@ function createStoreConnections(report) {
       try {
         return await open(storeConfig);
       } catch (retryErr) {
-        console.warn(`  ${slug}: connection failed — ${retryErr.message}`);
-        recordFailure(slug, 'connect', retryErr.message);
+        const detail = core.describeError(retryErr);
+        console.warn(`  ${slug}: connection failed — ${detail}`);
+        recordFailure(slug, 'connect', detail);
         dead.add(slug);
         return null;
       }
@@ -234,7 +235,7 @@ function createStoreConnections(report) {
       } catch (err) {
         await release(slug);
         if (attempt === 2 || !core.isConnectionError(err)) throw err;
-        console.warn(`  ${slug}: lost the connection mid-query (${err.message}) — reconnecting`);
+        console.warn(`  ${slug}: lost the connection mid-query (${core.describeError(err)}) — reconnecting`);
       }
     }
     throw new Error('unreachable');
@@ -619,6 +620,18 @@ async function main() {
 
   if (activeStores.length === 0) {
     throw new Error('No stores have a configured Neon connection string.');
+  }
+
+  // With no write budget there is nothing this run can act on, and discovery
+  // is not free: it opens 34 Neon connections and full-scans every store's
+  // offers table. On 2026-07-31 the budget was 0 all day (the Firestore
+  // incident had consumed the daily write allowance) and three runs paid that
+  // cost to write nothing. Stop before touching Neon at all.
+  if (args.apply && effectiveMaxWrites <= 0) {
+    console.log('\nWrite budget is 0 for this run — skipping discovery and cross-check entirely.');
+    console.log('Nothing was read from Neon and nothing was written to Firestore.');
+    console.log('The budget returns once the daily Firestore write quota resets (07:00 UTC).');
+    return;
   }
 
   // Connections are opened on demand by the manager and released as soon as a

@@ -40,13 +40,31 @@ function createNeonClient(connectionString, label, onDrop) {
     query_timeout: NEON_QUERY_TIMEOUT_MS,
   });
   client.on('error', (err) => {
-    console.warn(`  ${label}: connection dropped — ${err.message}`);
+    console.warn(`  ${label}: connection dropped — ${describeError(err)}`);
     if (typeof onDrop === 'function') {
       try { onDrop(err, client); } catch { /* a drop handler must never throw */ }
     }
     client.end().catch(() => {});
   });
   return client;
+}
+
+// Node's happy-eyeballs connect rejects with an AggregateError whose own
+// `message` is EMPTY — the real causes sit in `.errors`. Logging `err.message`
+// therefore produced bare lines like "drogasil: connection failed — " in the
+// 2026-07-31 15:18 UTC run, which said nothing about why all 34 stores failed.
+function describeError(err) {
+  if (!err) return 'unknown error';
+  const own = String(err.message || '').trim();
+  const nested = Array.isArray(err.errors)
+    ? err.errors.map((e) => String(e?.message || e || '').trim()).filter(Boolean)
+    : [];
+  if (nested.length) {
+    // De-duplicate: happy-eyeballs usually reports the same failure per address.
+    const unique = [...new Set(nested)];
+    return own ? `${own} (${unique.join('; ')})` : unique.join('; ');
+  }
+  return own || `${err.name || 'Error'} (no message)`;
 }
 
 // Errors that mean "this socket is gone" rather than "this SQL is wrong".
@@ -382,6 +400,7 @@ module.exports = {
   STORE_RECENT_PRICE_COLLECTION,
   createNeonClient,
   isConnectionError,
+  describeError,
   normalizeBarcode,
   isValidBarcode,
   buildProductDocId,
