@@ -359,13 +359,21 @@ function calculateDynamicWriteBudget({ writesUsed, writeLimit, requestedMax, saf
   return { budget, used, limit, remaining, safeRemaining };
 }
 
+// How old a guard snapshot may be and still be trusted. The scheduler refreshes
+// hourly, so anything past two hours means the guard itself has stopped — and a
+// dead guard must not be able to veto the sync indefinitely. On 2026-08-01 the
+// guard stopped writing at 07:20 holding a miscounted over-limit reading, and
+// every sync run for the rest of the day read that frozen snapshot and gave
+// itself a zero budget.
+const GUARD_SNAPSHOT_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+
 // Reads the same SystemHealth/firestore-free-tier-guard doc the app's own
 // compaction job trusts (kept fresh by firestoreFreeTierGuardScheduler,
 // which runs hourly). Fails OPEN — a missing/unreadable doc or a stale
 // snapshot should never block a sync run; it just means this extra safety
 // layer is skipped for that run and the configured/requested budget is
 // used as-is.
-async function fetchGuardUsage(db) {
+async function fetchGuardUsage(db, { now = Date.now(), maxAgeMs = GUARD_SNAPSHOT_MAX_AGE_MS } = {}) {
   try {
     const snap = await db.collection('SystemHealth').doc('firestore-free-tier-guard').get();
     if (!snap.exists) return null;
@@ -373,6 +381,12 @@ async function fetchGuardUsage(db) {
     const writesUsed = Number(data.usage?.writes);
     const writeLimit = Number(data.limits?.writes);
     if (!Number.isFinite(writesUsed) || !Number.isFinite(writeLimit) || writeLimit <= 0) return null;
+
+    // Fail open on a snapshot too old to describe the current quota day.
+    const checkedAtMs = Date.parse(String(data.checkedAt || ''));
+    if (!Number.isFinite(checkedAtMs)) return null;
+    if (now - checkedAtMs > maxAgeMs) return null;
+
     return { writesUsed, writeLimit, checkedAt: data.checkedAt || null };
   } catch {
     return null;
@@ -419,4 +433,5 @@ module.exports = {
   calculateDynamicWriteBudget,
   fetchGuardUsage,
   computeDynamicWriteBudget,
+  GUARD_SNAPSHOT_MAX_AGE_MS,
 };
