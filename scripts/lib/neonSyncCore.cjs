@@ -165,6 +165,35 @@ const EFFECTIVE_PRICE_SQL = `case
     else null
   end`;
 
+// CJS copy of src/lib/searchText.js — keep in sync.
+// The sync creates essentially the whole catalogue, so anything it does not
+// write here simply does not exist: name_search was 0/3942 in production
+// because only import-csv and the client ever set it.
+function normalizeSearchText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+const SEARCH_TOKEN_MIN_LENGTH = 2;
+const SEARCH_TOKEN_MAX_COUNT = 30;
+
+function buildSearchTokens(value) {
+  const normalized = normalizeSearchText(value);
+  if (!normalized) return [];
+  const seen = new Set();
+  for (const word of normalized.split(' ')) {
+    if (word.length < SEARCH_TOKEN_MIN_LENGTH) continue;
+    seen.add(word);
+    if (seen.size >= SEARCH_TOKEN_MAX_COUNT) break;
+  }
+  return [...seen];
+}
+
 function round2(n) {
   return Math.round(Number(n) * 100) / 100;
 }
@@ -229,10 +258,12 @@ function writePriceTriplet(writer, { storeId, storeConfig, barcode, row, priceRo
   const productUrl = String(row.product_url || '').trim();
   const productName = String(row.product_name || '').trim();
 
+  const resolvedName = productName || `Product ${barcode}`;
+
   writer.upsert('Product', productId, {
     ...(isNewProduct ? {
       barcode,
-      name: productName || `Product ${barcode}`,
+      name: resolvedName,
       brand: String(row.brand || '').trim(),
       name_lower: productName.toLowerCase(),
       image_url: String(row.image_url || '').trim(),
@@ -240,6 +271,12 @@ function writePriceTriplet(writer, { storeId, storeConfig, barcode, row, priceRo
       created_by: SYNC_ACTOR_ID,
       created_by_name: SYNC_ACTOR_NAME,
     } : {}),
+    // Written on EVERY pass, not just for new products. This document is
+    // already being upserted for the price, so the search fields ride along at
+    // no extra write cost — which is also how the existing catalogue gets
+    // backfilled: each product picks them up the next time its price moves.
+    name_search: normalizeSearchText(resolvedName),
+    name_tokens: buildSearchTokens(resolvedName),
     price_summary: {
       latest_price: priceRounded,
       latest_date: nowIso,
@@ -430,6 +467,8 @@ module.exports = {
   writePriceTriplet,
   ensureStoreDoc,
   recordStoreFreshness,
+  normalizeSearchText,
+  buildSearchTokens,
   calculateDynamicWriteBudget,
   fetchGuardUsage,
   computeDynamicWriteBudget,
