@@ -118,5 +118,15 @@ module.exports = {
     { slug: 'oncoexpresso', displayName: 'Onco Expresso', envVar: 'NEON_DATABASE_URL_ONCOEXPRESSO' },
     { slug: 'oncohealthmedicamentos', displayName: 'Onco Health Medicamentos', envVar: 'NEON_DATABASE_URL_ONCOHEALTHMEDICAMENTOS' },
     { slug: 'lj_oncoexpress', displayName: 'LJ Onco Express', envVar: 'NEON_DATABASE_URL_LJ_ONCOEXPRESS' },
+
+    // Added 2026-08-03. All six connect and carry fresh scrapes; verified
+    // before registering. displayName is what the app shows on the store
+    // card — adjust if a chain's public name differs.
+    { slug: 'farmsaopaulo', displayName: 'Farma São Paulo', envVar: 'NEON_DATABASE_URL_FARMSAOPAULO' },
+    { slug: 'nissei', displayName: 'Farmácias Nissei', envVar: 'NEON_DATABASE_URL_NISSEI' },
+    { slug: 'drogal', displayName: 'Drogal', envVar: 'NEON_DATABASE_URL_DROGAL' },
+    { slug: 'veracruz', displayName: 'Farmácia Vera Cruz', envVar: 'NEON_DATABASE_URL_VERACRUZ' },
+    { slug: 'farmagerty', displayName: 'Farma Gerty', envVar: 'NEON_DATABASE_URL_FARMAGERTY' },
+    { slug: 'sampharma', displayName: 'Sampharma', envVar: 'NEON_DATABASE_URL_SAMPHARMA' },
   ],
 };
