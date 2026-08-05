@@ -277,11 +277,12 @@ function writePriceTriplet(writer, { storeId, storeConfig, barcode, row, priceRo
     // backfilled: each product picks them up the next time its price moves.
     name_search: normalizeSearchText(resolvedName),
     name_tokens: buildSearchTokens(resolvedName),
+    // No store identity: Product is world-readable, so this named one of the
+    // stores selling the item to every visitor. Price and date stay — they are
+    // what the free tier is meant to show.
     price_summary: {
       latest_price: priceRounded,
       latest_date: nowIso,
-      latest_store_name: storeConfig.displayName,
-      latest_store_id: storeId,
     },
     price_min_30d: min,
     price_max_30d: max,
