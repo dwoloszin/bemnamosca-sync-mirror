@@ -710,6 +710,18 @@ async function main() {
       }
     }
 
+    // The Home shop window. This script — not sync-neon-to-firestore.cjs —
+    // is what the scheduled Action actually runs, so the highlights have to
+    // be written from here or they would never be produced in production.
+    let highlights = { items: [], written: false };
+    try {
+      const slugs = [...new Set(activeStores.map((sc) => sc.slug))];
+      highlights = await core.writeHighValueHighlights(db, mirror, slugs, { apply: args.apply });
+    } catch (err) {
+      // Never fail a price sync over the shop window.
+      console.warn(`  Highlights skipped: ${err?.message || err}`);
+    }
+
     console.log('\n=== Summary ===');
     for (const s of report.crossCheckByStore) {
       console.log(`  ${s.slug.padEnd(20)} [${s.tier}] scanned=${s.scanned}  new=${s.created ?? 0}  repriced=${s.updated ?? 0}`);
@@ -719,6 +731,10 @@ async function main() {
     }
     if (report.failedStores.length > 0) {
       console.log(`  FAILED (isolated, run continued): ${report.failedStores.join('; ')}`);
+    }
+    console.log(`  Highlights: ${highlights.items.length} item(s)${highlights.written ? ' written' : ' (dry-run)'}`);
+    for (const it of highlights.items) {
+      console.log(`    R$${it.saving_amount.toFixed(2)} (${it.saving_percent}%, ${it.store_count} lojas) ${it.name.slice(0, 40)}`);
     }
     console.log(`  Invalid barcodes skipped: ${report.invalidBarcodes}`);
     if (report.belowThresholdSkipped) {
