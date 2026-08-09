@@ -360,6 +360,17 @@ async function main() {
     }
   }
 
+  // Built from the mirror after it is up to date, so the window reflects this
+  // run. Zero Firestore reads; one write.
+  let highlights = { items: [], written: false };
+  try {
+    const slugs = [...new Set(report.perStore.map((s) => s.slug))];
+    highlights = await core.writeHighValueHighlights(db, mirror, slugs, { apply: args.apply });
+  } catch (err) {
+    // Never fail a price sync over the shop window.
+    console.warn(`  Highlights skipped: ${err?.message || err}`);
+  }
+
   console.log('\n=== Summary ===');
   for (const s of report.perStore) {
     console.log(`  ${s.slug.padEnd(20)} scanned=${s.scanned}  changed=${s.changed}`);
@@ -372,6 +383,10 @@ async function main() {
   console.log(`  Per-store budget this run: ${perStoreWrites} (${effectiveMaxWrites} / ${activeStores.length} active stores)`);
   console.log(`  Firestore writes ${args.apply ? 'performed' : 'estimated'}: ${globalWritesUsed} / ${effectiveMaxWrites}`);
   console.log(`  Mirror commit/push: ${gitResult.pushed ? 'OK' : `skipped (${gitResult.reason})`}`);
+  console.log(`  Highlights: ${highlights.items.length} item(s)${highlights.written ? ' written' : ' (dry-run)'}`);
+  for (const it of highlights.items) {
+    console.log(`    R$${it.saving_amount.toFixed(2)} (${it.saving_percent}%, ${it.store_count} lojas) ${it.name.slice(0, 40)}`);
+  }
   if (!args.apply) {
     console.log('\n  Dry-run only — re-run with --apply to write to Firestore and update the mirror.');
   }

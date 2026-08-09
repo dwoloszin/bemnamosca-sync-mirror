@@ -7,6 +7,7 @@
 // (sync-neon-high-value.cjs) — kept here once so both stay in lockstep with
 // functions/index.js's doc-id scheme instead of drifting apart.
 'use strict';
+const { computeHighValueSavings, collectFromMirror } = require('./highValueSavings.cjs');
 
 const fs = require('fs');
 const crypto = require('crypto');
@@ -448,7 +449,49 @@ async function computeDynamicWriteBudget(db, requestedMax, safetyPercent) {
   return { ...result, checkedAt: guard.checkedAt, guardAvailable: true };
 }
 
+
+// ────────────────────────────────────────────────────────────
+// "Where comparing saves the most" — the Home shop window.
+//
+// Computed from the MIRROR, which already holds the last known price per
+// (store, barcode) for every store and persists across runs. So this costs
+// zero Firestore reads: the sync is the only process that ever needed the
+// cross-store view, and it has it in memory anyway.
+//
+// One write per run. The document names no store — only how many agree —
+// because which shop sells it at that price is the subscription.
+// ────────────────────────────────────────────────────────────
+const HIGHLIGHTS_DOC = 'CatalogueHighlights/current';
+
+async function writeHighValueHighlights(db, mirror, storeSlugs, { apply = false, limit = 3 } = {}) {
+  const byBarcode = collectFromMirror(mirror, storeSlugs);
+  const items = computeHighValueSavings(byBarcode, { limit });
+
+  const payload = {
+    items: items.map((it) => ({
+      product_id: buildProductDocId(it.barcode),
+      barcode: it.barcode,
+      name: it.name,
+      store_count: it.store_count,
+      min_price: it.min_price,
+      max_price: it.max_price,
+      saving_amount: it.saving_amount,
+      saving_percent: it.saving_percent,
+    })),
+    candidates_considered: byBarcode.size,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (!apply) return { ...payload, written: false };
+
+  const [collection, docId] = HIGHLIGHTS_DOC.split('/');
+  await db.collection(collection).doc(docId).set(payload);
+  return { ...payload, written: true };
+}
+
 module.exports = {
+  writeHighValueHighlights,
+  HIGHLIGHTS_DOC,
   STORE_RECENT_PRICE_COLLECTION,
   createNeonClient,
   isConnectionError,
