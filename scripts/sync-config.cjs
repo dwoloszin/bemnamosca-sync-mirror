@@ -47,7 +47,17 @@ module.exports = {
   // barcode). See that script's header for the two-phase discovery/cross-
   // store approach. Lower = more products qualify = more read/write pressure
   // (still capped by maxWritesPerRun and the dynamic budget below).
-  MIN_VALUE: 1000,
+  // Lowered 1000 -> 500 on 2026-08-18. Measured before deciding: 10,097
+  // products qualify (up from 3,492), which is 27,410 (product, store) pairs
+  // and 82,230 writes to load — deliberately left to trickle in through the
+  // normal 2,000-per-run budget over about nine days rather than raised for a
+  // one-off push, because the guard's write ceiling is 50,000/day and the
+  // guard has taken this project down once already.
+  //
+  // Steady state afterwards is ~2,746 writes/day, from a measured 3.34% daily
+  // price churn — 5.5% of that ceiling. R$300 was costed too (50,467 pairs,
+  // ~5,057 writes/day) and deferred until this level is seen to hold.
+  MIN_VALUE: 500,
 
   // Caps each run's write budget at this percent of TODAY'S REMAINING write
   // headroom (20,000/day free-tier limit minus writes already used today,

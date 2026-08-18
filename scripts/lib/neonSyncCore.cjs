@@ -7,6 +7,8 @@
 // (sync-neon-high-value.cjs) — kept here once so both stay in lockstep with
 // functions/index.js's doc-id scheme instead of drifting apart.
 'use strict';
+
+const { decodeHtmlEntities } = require('./htmlEntities.cjs');
 const { computeHighValueSavings, collectFromMirror } = require('./highValueSavings.cjs');
 
 const fs = require('fs');
@@ -257,7 +259,10 @@ function writePriceTriplet(writer, { storeId, storeConfig, barcode, row, priceRo
   const dateOnly = nowIso.slice(0, 10);
   const productId = buildProductDocId(barcode);
   const productUrl = String(row.product_url || '').trim();
-  const productName = String(row.product_name || '').trim();
+  // Decoded here, at the only place a scraped name enters Firestore. Fixing the
+  // rows without fixing this would look solved until the next sync run put the
+  // entities back.
+  const productName = decodeHtmlEntities(row.product_name).trim();
 
   const resolvedName = productName || `Product ${barcode}`;
 
