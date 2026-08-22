@@ -19,7 +19,13 @@ module.exports = {
   // Going much higher has diminishing returns: dynamicBudgetSafetyPercent
   // below caps each run at 75% of the day's REMAINING headroom, so once
   // cumulative usage nears 15k the later runs get throttled anyway.
-  maxWritesPerRun: 2000,
+  //
+  // 2026-08-22: raised to 2500 once the MIN_VALUE=500 backlog had drained
+  // (runs went 2003 → 99 → 0 writes in a day). Six runs × 2500 = 15k plus
+  // ~2k of organic traffic leaves ~3k under the 20k free tier on a worst
+  // day; 3000 would land on the line. The brake in neonSyncCore now measures
+  // headroom against the 20k free tier regardless of what the guard reports.
+  maxWritesPerRun: 2500,
 
   // How many `offers` rows to pull per store, per run, before diffing
   // against the mirror. Kept well above maxWritesPerRun because most rows

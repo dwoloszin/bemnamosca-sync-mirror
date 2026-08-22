@@ -391,9 +391,21 @@ async function recordStoreFreshness(writer, client, storeConfig) {
 // the free-tier write limit. safetyPercent < 100 leaves room for staleness
 // in the cached usage snapshot (see fetchGuardUsage) and for organic app
 // traffic writing the rest of the day.
+// The Firestore free tier: the number this brake exists to protect. The guard
+// document reports a higher limit (50,000 — the billing kill-switch's
+// ceiling, not the free one), and until 2026-08-22 this function trusted it:
+// with 15k writes already spent, 75% of the 35k "remaining" was 26k, so the
+// brake never engaged before the free tier was gone. Measured that day: a
+// quota day reached ~13.7k with six budget-hit runs, and nothing would have
+// stopped the seventh.
+const FREE_TIER_WRITES_PER_DAY = 20000;
+
 function calculateDynamicWriteBudget({ writesUsed, writeLimit, requestedMax, safetyPercent }) {
   const used = Number(writesUsed) || 0;
-  const limit = Number(writeLimit) > 0 ? Number(writeLimit) : 20000;
+  const reported = Number(writeLimit) > 0 ? Number(writeLimit) : FREE_TIER_WRITES_PER_DAY;
+  // Whichever is lower: a guard configured BELOW the free tier is respected,
+  // one configured above it is not allowed to loosen the brake.
+  const limit = Math.min(reported, FREE_TIER_WRITES_PER_DAY);
   const safety = Math.max(0, Math.min(100, Number(safetyPercent))) / 100;
 
   const remaining = Math.max(0, limit - used);
