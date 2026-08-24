@@ -1,0 +1,93 @@
+name: Neon DB maintenance
+
+# Keeps the forty store databases fast: report mode is a zero-scan catalog
+# snapshot; apply mode deletes long-dead offers rows and old price history in
+# bounded batches, then VACUUM ANALYZEs - the step that restores index speed.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: report (so relatorio) ou apply (limpa + vacuum)
+        required: true
+        default: report
+        type: choice
+        options: [report, apply]
+      dead_grace_days:
+        description: offers indisponiveis ha mais de N dias sao removidas
+        required: false
+        default: '30'
+        type: string
+      history_retention_days:
+        description: price_history mais antigo que N dias e removido
+        required: false
+        default: '180'
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  MODE: ${{ github.event.inputs.mode }}
+  DEAD_GRACE_DAYS: ${{ github.event.inputs.dead_grace_days }}
+  HISTORY_RETENTION_DAYS: ${{ github.event.inputs.history_retention_days }}
+  NEON_QUERY_TIMEOUT_MS: '600000'
+  NEON_DATABASE_URL_DROGALESTE: ${{ secrets.NEON_DATABASE_URL_DROGALESTE }}
+  NEON_DATABASE_URL_DROGASIL: ${{ secrets.NEON_DATABASE_URL_DROGASIL }}
+  NEON_DATABASE_URL_DROGARAIA: ${{ secrets.NEON_DATABASE_URL_DROGARAIA }}
+  NEON_DATABASE_URL_DROGARIASAOPAULO: ${{ secrets.NEON_DATABASE_URL_DROGARIASAOPAULO }}
+  NEON_DATABASE_URL_ULTRAFARMA: ${{ secrets.NEON_DATABASE_URL_ULTRAFARMA }}
+  NEON_DATABASE_URL_PAGUEMENOS: ${{ secrets.NEON_DATABASE_URL_PAGUEMENOS }}
+  NEON_DATABASE_URL_FARMAIS: ${{ secrets.NEON_DATABASE_URL_FARMAIS }}
+  NEON_DATABASE_URL_PANVEL: ${{ secrets.NEON_DATABASE_URL_PANVEL }}
+  NEON_DATABASE_URL_FARMACIASAPP: ${{ secrets.NEON_DATABASE_URL_FARMACIASAPP }}
+  NEON_DATABASE_URL_FARMACONDE: ${{ secrets.NEON_DATABASE_URL_FARMACONDE }}
+  NEON_DATABASE_URL_EUALIRIA: ${{ secrets.NEON_DATABASE_URL_EUALIRIA }}
+  NEON_DATABASE_URL_AGILLEMED: ${{ secrets.NEON_DATABASE_URL_AGILLEMED }}
+  NEON_DATABASE_URL_NOVAMED: ${{ secrets.NEON_DATABASE_URL_NOVAMED }}
+  NEON_DATABASE_URL_PHARMED: ${{ secrets.NEON_DATABASE_URL_PHARMED }}
+  NEON_DATABASE_URL_JUSTMEDICAMENTOS: ${{ secrets.NEON_DATABASE_URL_JUSTMEDICAMENTOS }}
+  NEON_DATABASE_URL_GHFARMA: ${{ secrets.NEON_DATABASE_URL_GHFARMA }}
+  NEON_DATABASE_URL_LEVITTA: ${{ secrets.NEON_DATABASE_URL_LEVITTA }}
+  NEON_DATABASE_URL_DINAMICA: ${{ secrets.NEON_DATABASE_URL_DINAMICA }}
+  NEON_DATABASE_URL_FACILITA: ${{ secrets.NEON_DATABASE_URL_FACILITA }}
+  NEON_DATABASE_URL_PACHECO: ${{ secrets.NEON_DATABASE_URL_PACHECO }}
+  NEON_DATABASE_URL_MEVOFARMA: ${{ secrets.NEON_DATABASE_URL_MEVOFARMA }}
+  NEON_DATABASE_URL_SINGULAR: ${{ secrets.NEON_DATABASE_URL_SINGULAR }}
+  NEON_DATABASE_URL_MUNDIAL: ${{ secrets.NEON_DATABASE_URL_MUNDIAL }}
+  NEON_DATABASE_URL_REMED: ${{ secrets.NEON_DATABASE_URL_REMED }}
+  NEON_DATABASE_URL_FAST: ${{ secrets.NEON_DATABASE_URL_FAST }}
+  NEON_DATABASE_URL_PROGOODS: ${{ secrets.NEON_DATABASE_URL_PROGOODS }}
+  NEON_DATABASE_URL_HERA: ${{ secrets.NEON_DATABASE_URL_HERA }}
+  NEON_DATABASE_URL_CAMPEA: ${{ secrets.NEON_DATABASE_URL_CAMPEA }}
+  NEON_DATABASE_URL_INTEGRAL: ${{ secrets.NEON_DATABASE_URL_INTEGRAL }}
+  NEON_DATABASE_URL_QUALIDOC: ${{ secrets.NEON_DATABASE_URL_QUALIDOC }}
+  NEON_DATABASE_URL_ALIANZA: ${{ secrets.NEON_DATABASE_URL_ALIANZA }}
+  NEON_DATABASE_URL_ONCOEXPRESSO: ${{ secrets.NEON_DATABASE_URL_ONCOEXPRESSO }}
+  NEON_DATABASE_URL_ONCOHEALTHMEDICAMENTOS: ${{ secrets.NEON_DATABASE_URL_ONCOHEALTHMEDICAMENTOS }}
+  NEON_DATABASE_URL_LJ_ONCOEXPRESS: ${{ secrets.NEON_DATABASE_URL_LJ_ONCOEXPRESS }}
+  NEON_DATABASE_URL_FARMSAOPAULO: ${{ secrets.NEON_DATABASE_URL_FARMSAOPAULO }}
+  NEON_DATABASE_URL_NISSEI: ${{ secrets.NEON_DATABASE_URL_NISSEI }}
+  NEON_DATABASE_URL_DROGAL: ${{ secrets.NEON_DATABASE_URL_DROGAL }}
+  NEON_DATABASE_URL_VERACRUZ: ${{ secrets.NEON_DATABASE_URL_VERACRUZ }}
+  NEON_DATABASE_URL_FARMAGERTY: ${{ secrets.NEON_DATABASE_URL_FARMAGERTY }}
+  NEON_DATABASE_URL_SAMPHARMA: ${{ secrets.NEON_DATABASE_URL_SAMPHARMA }}
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run maintenance
+        run: node scripts/db-maintenance.cjs
