@@ -1,10 +1,11 @@
 // ── Neon housekeeping: keep forty small databases fast ─────────────────────
 //
-// The offers tables accumulate dead rows (is_available=false) far beyond the
-// live catalogue — enough that any full-table aggregate grinds past the
-// statement timeout on the free-tier computes, measured 2026-08-24 when a
-// simple per-band COUNT timed out on every store while index walks flew.
-// price_history grows without bound by design.
+// Measured 2026-08-24 (report mode, all forty stores): 0.99 GiB total, with
+// 20-35% dead offers rows at the big chains (drogasil ~62k of ~182k) and
+// price_history growing without bound (drogaraia at 432k rows). Modest today
+// — this job exists so it stays that way. (The aggregate timeouts that
+// triggered this investigation turned out to be a missing client.connect(),
+// not bloat; the comment that blamed table size was wrong.)
 //
 // MODE=report  (default): catalog stats only — table sizes, row estimates,
 //   the history date column — zero scans, instant.
