@@ -63,7 +63,13 @@ module.exports = {
   // Steady state afterwards is ~2,746 writes/day, from a measured 3.34% daily
   // price churn — 5.5% of that ceiling. R$300 was costed too (50,467 pairs,
   // ~5,057 writes/day) and deferred until this level is seen to hold.
-  MIN_VALUE: 500,
+  // 2026-08-24: lowered to 300 on the census numbers (band-counts.yml in the
+  // mirror): the 300-500 band holds 23,856 (store,product) pairs ≈ 72k writes
+  // of initial fill ≈ 6 days at the 2,500/run budget, with the 20k free-tier
+  // brake making a faster day impossible. Next steps the owner has staged:
+  // 200 after this band settles, 100 only after the orphan cleanup's full
+  // SRPE scan is sliced (at 181k rows it would eat the read budget).
+  MIN_VALUE: 300,
 
   // Caps each run's write budget at this percent of TODAY'S REMAINING write
   // headroom (20,000/day free-tier limit minus writes already used today,
