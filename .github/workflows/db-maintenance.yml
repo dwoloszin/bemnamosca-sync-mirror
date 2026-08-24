@@ -4,6 +4,10 @@ name: Neon DB maintenance
 # snapshot; apply mode deletes long-dead offers rows and old price history in
 # bounded batches, then VACUUM ANALYZEs - the step that restores index speed.
 on:
+  # Monthly, day 5 at 09:00 UTC — after the quota reset and the morning sync,
+  # far from the orphan cleanup's days (1st and 15th). Scheduled runs apply.
+  schedule:
+    - cron: '0 9 5 * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -27,9 +31,9 @@ permissions:
   contents: read
 
 env:
-  MODE: ${{ github.event.inputs.mode }}
-  DEAD_GRACE_DAYS: ${{ github.event.inputs.dead_grace_days }}
-  HISTORY_RETENTION_DAYS: ${{ github.event.inputs.history_retention_days }}
+  MODE: ${{ github.event.inputs.mode || 'apply' }}
+  DEAD_GRACE_DAYS: ${{ github.event.inputs.dead_grace_days || '30' }}
+  HISTORY_RETENTION_DAYS: ${{ github.event.inputs.history_retention_days || '180' }}
   NEON_QUERY_TIMEOUT_MS: '600000'
   NEON_DATABASE_URL_DROGALESTE: ${{ secrets.NEON_DATABASE_URL_DROGALESTE }}
   NEON_DATABASE_URL_DROGASIL: ${{ secrets.NEON_DATABASE_URL_DROGASIL }}
