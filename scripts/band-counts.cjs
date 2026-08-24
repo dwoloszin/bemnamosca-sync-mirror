@@ -16,6 +16,7 @@ const PAGE = 4000;
     const client = createNeonClient(process.env[store.envVar], store.slug);
     const bands = { b500: 0, b300: 0, b200: 0, b100: 0, b0: 0 };
     try {
+      await client.connect();
       let cursor = '';
       for (;;) {
         const { rows } = await client.query(

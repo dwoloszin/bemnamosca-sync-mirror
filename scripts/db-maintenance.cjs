@@ -68,6 +68,9 @@ async function batchedDelete(client, table, whereSql, params) {
   for (const store of stores) {
     const client = createNeonClient(process.env[store.envVar], store.slug);
     try {
+      // node-postgres does not connect on first query — it queues the query
+      // for ever and the timeout fires. Every working script connects first.
+      await client.connect();
       const stats = await tableStats(client);
       const offers = stats.find((s) => s.table === 'offers') || {};
       const history = stats.find((s) => s.table === 'price_history') || {};
