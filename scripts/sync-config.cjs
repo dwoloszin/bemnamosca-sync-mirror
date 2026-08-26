@@ -150,5 +150,19 @@ module.exports = {
     { slug: 'veracruz', displayName: 'Farmácia Vera Cruz', envVar: 'NEON_DATABASE_URL_VERACRUZ' },
     { slug: 'farmagerty', displayName: 'Farma Gerty', envVar: 'NEON_DATABASE_URL_FARMAGERTY' },
     { slug: 'sampharma', displayName: 'Sampharma', envVar: 'NEON_DATABASE_URL_SAMPHARMA' },
+
+    // Added 2026-08-24 — twelve new chains, scrapers already feeding Neon.
+    { slug: 'anossadrogaria', displayName: 'A Nossa Drogaria', envVar: 'NEON_DATABASE_URL_ANOSSADROGARIA' },
+    { slug: 'araujo', displayName: 'Drogaria Araujo', envVar: 'NEON_DATABASE_URL_ARAUJO' },
+    { slug: 'callfarma', displayName: 'Callfarma', envVar: 'NEON_DATABASE_URL_CALLFARMA' },
+    { slug: 'catarinense', displayName: 'Drogaria Catarinense', envVar: 'NEON_DATABASE_URL_CATARINENSE' },
+    { slug: 'globo', displayName: 'Drogaria Globo', envVar: 'NEON_DATABASE_URL_GLOBO' },
+    { slug: 'indiana', displayName: 'Farmácias Indiana', envVar: 'NEON_DATABASE_URL_INDIANA' },
+    { slug: 'moderna', displayName: 'Drogaria Moderna', envVar: 'NEON_DATABASE_URL_MODERNA' },
+    { slug: 'permanente', displayName: 'Farmácia Permanente', envVar: 'NEON_DATABASE_URL_PERMANENTE' },
+    { slug: 'redesuperpopular', displayName: 'Rede Super Popular', envVar: 'NEON_DATABASE_URL_REDESUPERPOPULAR' },
+    { slug: 'santalucia', displayName: 'Farmácia Santa Lúcia', envVar: 'NEON_DATABASE_URL_SANTALUCIA' },
+    { slug: 'saojoao', displayName: 'Farmácias São João', envVar: 'NEON_DATABASE_URL_SAOJOAO' },
+    { slug: 'venancio', displayName: 'Drogarias Venancio', envVar: 'NEON_DATABASE_URL_VENANCIO' },
   ],
 };
