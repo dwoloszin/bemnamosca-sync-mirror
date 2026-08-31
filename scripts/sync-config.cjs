@@ -90,7 +90,7 @@ module.exports = {
   mirror: {
     repo: 'bemnamosca-sync-mirror',
     branch: 'main',
-    localPath: '.sync-mirror', // gitignored working copy of the mirror repo
+    localPath: '.', // gitignored working copy of the mirror repo
   },
 
   // One Neon Postgres database per pharmacy chain (each scraped on its own
