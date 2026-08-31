@@ -90,7 +90,7 @@ module.exports = {
   mirror: {
     repo: 'bemnamosca-sync-mirror',
     branch: 'main',
-    localPath: '.', // gitignored working copy of the mirror repo
+    localPath: '.sync-mirror', // gitignored working copy of the mirror repo
   },
 
   // One Neon Postgres database per pharmacy chain (each scraped on its own
@@ -164,5 +164,11 @@ module.exports = {
     { slug: 'santalucia', displayName: 'Farmácia Santa Lúcia', envVar: 'NEON_DATABASE_URL_SANTALUCIA' },
     { slug: 'saojoao', displayName: 'Farmácias São João', envVar: 'NEON_DATABASE_URL_SAOJOAO' },
     { slug: 'venancio', displayName: 'Drogarias Venancio', envVar: 'NEON_DATABASE_URL_VENANCIO' },
+
+    // Added 2026-08-31 — four new chains: RJ, DF, AM and Vale do Ribeira/SP.
+    { slug: 'drogasmil', displayName: 'Drogasmil', envVar: 'NEON_DATABASE_URL_DROGASMIL' },
+    { slug: 'rosario', displayName: 'Drogarias Rosário', envVar: 'NEON_DATABASE_URL_ROSARIO' },
+    { slug: 'santoremedio', displayName: 'Farmácia Santo Remédio', envVar: 'NEON_DATABASE_URL_SANTOREMEDIO' },
+    { slug: 'precopopular', displayName: 'Farmácia Preço Popular', envVar: 'NEON_DATABASE_URL_PRECOPOPULAR' },
   ],
 };
