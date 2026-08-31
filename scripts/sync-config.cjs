@@ -166,9 +166,11 @@ module.exports = {
     { slug: 'venancio', displayName: 'Drogarias Venancio', envVar: 'NEON_DATABASE_URL_VENANCIO' },
 
     // Added 2026-08-31 — four new chains: RJ, DF, AM and Vale do Ribeira/SP.
+    // Display names taken from each store's own product_url domain
+    // (drogasmil / drogariarosario / santoremedio / precopopular .com.br).
     { slug: 'drogasmil', displayName: 'Drogasmil', envVar: 'NEON_DATABASE_URL_DROGASMIL' },
-    { slug: 'rosario', displayName: 'Drogarias Rosário', envVar: 'NEON_DATABASE_URL_ROSARIO' },
-    { slug: 'santoremedio', displayName: 'Farmácia Santo Remédio', envVar: 'NEON_DATABASE_URL_SANTOREMEDIO' },
-    { slug: 'precopopular', displayName: 'Farmácia Preço Popular', envVar: 'NEON_DATABASE_URL_PRECOPOPULAR' },
+    { slug: 'rosario', displayName: 'Drogaria Rosário', envVar: 'NEON_DATABASE_URL_ROSARIO' },
+    { slug: 'santoremedio', displayName: 'Santo Remédio', envVar: 'NEON_DATABASE_URL_SANTOREMEDIO' },
+    { slug: 'precopopular', displayName: 'Preço Popular', envVar: 'NEON_DATABASE_URL_PRECOPOPULAR' },
   ],
 };
