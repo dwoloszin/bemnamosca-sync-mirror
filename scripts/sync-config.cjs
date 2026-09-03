@@ -90,7 +90,7 @@ module.exports = {
   mirror: {
     repo: 'bemnamosca-sync-mirror',
     branch: 'main',
-    localPath: '.', // gitignored working copy of the mirror repo
+    localPath: '.sync-mirror', // gitignored working copy of the mirror repo
   },
 
   // One Neon Postgres database per pharmacy chain (each scraped on its own
@@ -172,5 +172,14 @@ module.exports = {
     { slug: 'rosario', displayName: 'Drogaria Rosário', envVar: 'NEON_DATABASE_URL_ROSARIO' },
     { slug: 'santoremedio', displayName: 'Santo Remédio', envVar: 'NEON_DATABASE_URL_SANTOREMEDIO' },
     { slug: 'precopopular', displayName: 'Preço Popular', envVar: 'NEON_DATABASE_URL_PRECOPOPULAR' },
+
+    // Added 2026-09-03 — six SP-area chains. Display names follow each
+    // store's own product_url domain.
+    { slug: 'drogarialecer', displayName: 'Drogaria Lecer', envVar: 'NEON_DATABASE_URL_DROGARIALECER' },
+    { slug: 'diabetescenter', displayName: 'Diabetes Center', envVar: 'NEON_DATABASE_URL_DIABETESCENTER' },
+    { slug: 'pensefarma', displayName: 'Pense Farma', envVar: 'NEON_DATABASE_URL_PENSEFARMA' },
+    { slug: 'promofarma', displayName: 'Promofarma', envVar: 'NEON_DATABASE_URL_PROMOFARMA' },
+    { slug: 'redefarmaprime', displayName: 'Rede Farma Prime', envVar: 'NEON_DATABASE_URL_REDEFARMAPRIME' },
+    { slug: 'farmamed', displayName: 'Farmamed', envVar: 'NEON_DATABASE_URL_FARMAMED' },
   ],
 };
