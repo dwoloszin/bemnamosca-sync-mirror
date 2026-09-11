@@ -53,7 +53,14 @@ function computeHighValueSavings(byBarcode, options = {}) {
   const out = [];
 
   for (const [barcode, rawEntries] of byBarcode) {
-    const entries = (rawEntries || []).filter((e) => Number.isFinite(Number(e?.price)) && Number(e.price) > 0);
+    let entries = (rawEntries || []).filter((e) => Number.isFinite(Number(e?.price)) && Number(e.price) > 0);
+    // A capped tier's shop window shows only offers inside its slice — the
+    // min, max and saving are then all numbers that tier can act on. The
+    // corroboration minimum applies WITHIN the slice, so an item whose cheap
+    // offers are real but whose expensive ones sit outside still qualifies.
+    if (Number.isFinite(Number(opt.maxPrice)) && opt.maxPrice > 0) {
+      entries = entries.filter((e) => Number(e.price) <= Number(opt.maxPrice));
+    }
 
     // Distinct STORES, not distinct rows: the same shop listing an item twice
     // is one opinion, not two.

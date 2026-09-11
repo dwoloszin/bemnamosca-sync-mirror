@@ -480,11 +480,30 @@ async function computeDynamicWriteBudget(db, requestedMax, safetyPercent) {
 // ────────────────────────────────────────────────────────────
 const HIGHLIGHTS_DOC = 'CatalogueHighlights/current';
 
-async function writeHighValueHighlights(db, mirror, storeSlugs, { apply = false, limit = 3 } = {}) {
-  const byBarcode = collectFromMirror(mirror, storeSlugs);
-  const items = computeHighValueSavings(byBarcode, { limit });
+// Capped subscription tiers get their own shop-window doc (tier_<id>) whose
+// numbers all sit inside that tier's price slice. CJS copy of the parsing in
+// functions/lib/subscriptionTiers.js — same env var, same defaults; if you
+// change one, change the other. Only the caps matter here, never the prices.
+function parseTierCaps(env = process.env) {
+  const fallback = [{ id: 'silver', max_price: 1000 }];
+  const raw = String(env.SUBSCRIPTION_TIERS_JSON || '').trim();
+  if (!raw) return fallback;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return fallback;
+    return parsed
+      .map((t) => ({
+        id: String(t?.id || '').trim().toLowerCase(),
+        max_price: Number(t?.max_price) > 0 ? Number(t.max_price) : null,
+      }))
+      .filter((t) => /^[a-z0-9_-]{1,24}$/.test(t.id) && t.max_price != null);
+  } catch {
+    return fallback;
+  }
+}
 
-  const payload = {
+function buildHighlightsPayload(byBarcode, items) {
+  return {
     items: items.map((it) => ({
       product_id: buildProductDocId(it.barcode),
       barcode: it.barcode,
@@ -498,11 +517,30 @@ async function writeHighValueHighlights(db, mirror, storeSlugs, { apply = false,
     candidates_considered: byBarcode.size,
     updated_at: new Date().toISOString(),
   };
+}
+
+async function writeHighValueHighlights(db, mirror, storeSlugs, { apply = false, limit = 3 } = {}) {
+  const byBarcode = collectFromMirror(mirror, storeSlugs);
+  const items = computeHighValueSavings(byBarcode, { limit });
+  const payload = buildHighlightsPayload(byBarcode, items);
+
+  // One extra doc per capped tier per run — writes, never reads, which is
+  // the direction the budget can afford.
+  const tierPayloads = parseTierCaps().map((tier) => ({
+    tier,
+    payload: buildHighlightsPayload(
+      byBarcode,
+      computeHighValueSavings(byBarcode, { limit, maxPrice: tier.max_price }),
+    ),
+  }));
 
   if (!apply) return { ...payload, written: false };
 
   const [collection, docId] = HIGHLIGHTS_DOC.split('/');
   await db.collection(collection).doc(docId).set(payload);
+  for (const { tier, payload: tierPayload } of tierPayloads) {
+    await db.collection(collection).doc(`tier_${tier.id}`).set(tierPayload);
+  }
   return { ...payload, written: true };
 }
 
