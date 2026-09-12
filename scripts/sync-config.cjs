@@ -71,6 +71,17 @@ module.exports = {
   // SRPE scan is sliced (at 181k rows it would eat the read budget).
   MIN_VALUE: 300,
 
+  // Stores whose rows must not feed the Home/vitrine highlights. 2026-09-12:
+  // farmaciasapp's scraper refreshes DEAD pages as available — a random
+  // sample of 10 "available" product_urls returned 404 for 9 (the vitrine
+  // was headlining a R$390,99 perfume whose page no longer exists). Remove
+  // the slug here once the scraper verifies pages again; the store keeps
+  // appearing in ordinary comparisons, where its rows carry the
+  // limited-stock notice and a visible store name.
+  highlights: {
+    excludeStores: ['farmaciasapp'],
+  },
+
   // Caps each run's write budget at this percent of TODAY'S REMAINING write
   // headroom (20,000/day free-tier limit minus writes already used today,
   // per the SystemHealth/firestore-free-tier-guard doc the app's own guard

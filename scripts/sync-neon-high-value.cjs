@@ -715,7 +715,11 @@ async function main() {
     // be written from here or they would never be produced in production.
     let highlights = { items: [], written: false };
     try {
-      const slugs = [...new Set(activeStores.map((sc) => sc.slug))];
+      // Stores listed in highlights.excludeStores stay OUT of the shop
+      // window (untrustworthy scraper — see sync-config); they still sync
+      // and still appear in ordinary comparisons.
+      const excluded = new Set(syncConfig.highlights?.excludeStores || []);
+      const slugs = [...new Set(activeStores.map((sc) => sc.slug))].filter((s) => !excluded.has(s));
       highlights = await core.writeHighValueHighlights(db, mirror, slugs, { apply: args.apply });
     } catch (err) {
       // Never fail a price sync over the shop window.
