@@ -1,0 +1,89 @@
+name: Users data backup to Neon
+
+# Off-GCP backup of the four collections nothing else can rebuild:
+# User, Subscription, Transaction, ProductUnlocks. The target is a
+# DEDICATED Neon project (NEON_USERS_BACKUP_URL) — never one of the 62
+# store databases, so the price-sync lifeline's compute is untouched.
+#
+# Read-frugal by design: the first run takes a full snapshot; daily runs
+# tail per-collection timestamp cursors kept in the backup database (a
+# quiet day costs a handful of Firestore reads). On the 1st of the month
+# it re-reads everything and PURGES rows whose Firestore doc is gone, so
+# account deletion reaches the backup within a month (LGPD). This job
+# never writes to Firestore.
+#
+# 05:00 UTC = 02:00 BRT — between the 02:30 and 06:30 sync slots and
+# before the 07:00 UTC quota-day rollover.
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'true grava no Neon; false = dry-run (so conta)'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+      full:
+        description: 'full = releitura completa + purge de deletados'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true', 'false']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: users-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare Firebase service account
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "Missing secret: FIREBASE_SERVICE_ACCOUNT_JSON"
+            exit 1
+          fi
+          printf "%s" "$FIREBASE_SERVICE_ACCOUNT_JSON" > service-account.ci.json
+
+      - name: Run users backup
+        shell: bash
+        env:
+          NEON_USERS_BACKUP_URL: ${{ secrets.NEON_USERS_BACKUP_URL }}
+        run: |
+          MODE="--dry-run"
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.apply }}" = "true" ]; then
+            MODE="--apply"
+          fi
+          # Monthly reconciliation: the 1st's scheduled run re-reads
+          # everything and purges deleted docs; manual runs can force it.
+          FULL=""
+          if [ "$(date -u +%d)" = "01" ] || [ "${{ inputs.full }}" = "true" ]; then
+            FULL="--full"
+          fi
+
+          node scripts/users-backup-to-neon.cjs \
+            $MODE $FULL \
+            --service-account ./service-account.ci.json \
+            --project-id "${{ secrets.VITE_FIREBASE_PROJECT_ID }}"
