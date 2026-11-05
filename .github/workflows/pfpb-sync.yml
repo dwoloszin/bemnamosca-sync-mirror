@@ -1,0 +1,80 @@
+name: Farmácia Popular -> Firestore
+
+# Copies the FARMACIA_POPULAR project's Neon database (NEON_DATABASE_URL_PFPB:
+# the free list, matched EANs, accredited pharmacies) into the few Firestore
+# documents the app reads (PfpbCatalog, PfpbCity, PfpbCell).
+#
+# Write-frugal: a manifest of per-document hashes means a weekly run writes
+# only what changed — mostly the cities whose pharmacies gained coordinates
+# that week (~1,000 geocoded per week upstream). --max-writes 2500 brakes any
+# big change; the remainder goes on the next run.
+#
+# Tuesdays 12:00 UTC: after the PFPB project's own Monday jobs (medicine
+# correlation 09:00, pharmacy lookups 11:00 — which can resume over hours),
+# between the price sync's 10:30 and 14:30 slots.
+on:
+  schedule:
+    - cron: '0 12 * * 2'
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'true grava no Firestore; false = dry-run (so conta)'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+      max_writes:
+        description: 'limite de escritas desta execucao'
+        required: false
+        default: '2500'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pfpb-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare Firebase service account
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "Missing secret: FIREBASE_SERVICE_ACCOUNT_JSON"
+            exit 1
+          fi
+          printf "%s" "$FIREBASE_SERVICE_ACCOUNT_JSON" > service-account.ci.json
+
+      - name: Run Farmácia Popular sync
+        shell: bash
+        env:
+          NEON_DATABASE_URL_PFPB: ${{ secrets.NEON_DATABASE_URL_PFPB }}
+        run: |
+          MODE="--dry-run"
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.apply }}" = "true" ]; then
+            MODE="--apply"
+          fi
+          node scripts/pfpb-sync-to-firestore.cjs \
+            $MODE \
+            --max-writes "${{ inputs.max_writes || '2500' }}" \
+            --service-account ./service-account.ci.json \
+            --project-id "${{ secrets.VITE_FIREBASE_PROJECT_ID }}"
